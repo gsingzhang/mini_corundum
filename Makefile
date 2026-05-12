@@ -7,6 +7,9 @@ AXIS_LIB = $(CORUNDUM_DIR)/fpga/lib/axis/rtl
 
 SRC = rtl/mini_corundum_top.v \
       rtl/cmd_stream_app.v \
+      rtl/host_network_stack.v \
+      rtl/udp_complete_64_local.v \
+      rtl/ip_complete_64_local.v \
       $(ETH_LIB)/eth_axis_rx.v \
       $(ETH_LIB)/eth_axis_tx.v \
       $(ETH_LIB)/udp_complete_64.v \
@@ -69,7 +72,7 @@ sim:
 # VCS targets
 vcs:
 	vcs -full64 -sverilog -timescale=1ns/1ps -debug_access+all -kdb -lca \
-	    +incdir+$(ETH_LIB) +incdir+$(AXI_LIB) +incdir+$(AXIS_LIB) \
+	    +incdir+rtl +incdir+$(ETH_LIB) +incdir+$(AXI_LIB) +incdir+$(AXIS_LIB) \
 	    $(SRC) $(TB_SRC)
 
 vcs_sim: vcs
