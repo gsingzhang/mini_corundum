@@ -1,11 +1,26 @@
 #!/bin/bash
 
-# Shell script to run Vivado build for FPGA project
-# Usage: ./build.sh
+# Shell script to run Vivado build or create project for FPGA project
+# Usage: ./build.sh [build|project]
+#   build    - Run non-project mode synthesis and bitstream generation (default)
+#   project  - Create Vivado project file (.xpr)
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Check parameter
+MODE="build"
+if [ $# -gt 0 ]; then
+    if [ "$1" = "project" ]; then
+        MODE="project"
+    elif [ "$1" != "build" ]; then
+        echo "Usage: ./build.sh [build|project]"
+        echo "  build    - Run non-project mode synthesis and bitstream generation (default)"
+        echo "  project  - Create Vivado project file (.xpr)"
+        exit 1
+    fi
+fi
 
 # Check if Vivado is available
 if ! command -v vivado &> /dev/null; then
@@ -13,15 +28,32 @@ if ! command -v vivado &> /dev/null; then
     exit 1
 fi
 
-echo "Found Vivado, starting build..."
-
-# Run the TCL build script
-vivado -nojournal -nolog -mode batch -source build.tcl
-
-# Check build result
-if [ $? -eq 0 ]; then
-    echo "Build completed successfully!"
+if [ "$MODE" = "build" ]; then
+    echo "Found Vivado, starting build (non-project mode)..."
 else
-    echo "Build failed with exit code $?"
-    exit $?
+    echo "Found Vivado, creating project..."
+fi
+
+# Run the appropriate TCL script
+if [ "$MODE" = "build" ]; then
+    vivado -nojournal -nolog -mode batch -source build.tcl
+else
+    vivado -nojournal -nolog -mode batch -source create_project.tcl
+fi
+
+# Check result
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    if [ "$MODE" = "build" ]; then
+        echo "Build completed successfully!"
+    else
+        echo "Project created successfully!"
+    fi
+else
+    if [ "$MODE" = "build" ]; then
+        echo "Build failed with exit code $EXIT_CODE"
+    else
+        echo "Project creation failed with exit code $EXIT_CODE"
+    fi
+    exit $EXIT_CODE
 fi
