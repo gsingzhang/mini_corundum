@@ -31,6 +31,7 @@ ETH_RTL_DIR = $(LIB_DIR)/eth/rtl
 AXIS_RTL_DIR = $(LIB_DIR)/eth/lib/axis/rtl
 
 # Source files
+VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol.sv
 VERILOG_SOURCES += $(RTL_DIR)/$(DUT).v
 VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_mac_10g_fifo.v
 VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_mac_10g.v
