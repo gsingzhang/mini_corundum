@@ -113,8 +113,8 @@ fpga_core dut (
 
 always #(CLK_PERIOD/2) clk = ~clk;
 
-reg [63:0] tx_capture [0:127];
-reg [7:0]  tx_ctrl_capture [0:127];
+reg [63:0] tx_capture [0:2047];
+reg [7:0]  tx_ctrl_capture [0:2047];
 integer    tx_capture_len;
 integer    tx_frame_count;
 reg        tx_frame_active;
@@ -169,6 +169,15 @@ task reset_tx_capture;
         tx_frame_count = 0;
         tx_frame_active = 0;
         tx_capture_len = 0;
+    end
+endtask
+
+task set_payload_size;
+    input [15:0] size_bytes;
+    begin
+        $display("[%0t] Setting test payload size to %0d bytes", $time, size_bytes);
+        dut.test_data_payload_size_reg = size_bytes;
+        @(posedge clk);
     end
 endtask
 
@@ -579,14 +588,19 @@ endtask
 
 task verify_ludp_data;
     input [31:0] exp_seq;
+    input [15:0] exp_pay_len;  // Expected payload size (0 = skip check)
     reg [15:0] udp_src_port;
     reg [15:0] udp_dst_port;
+    reg [15:0] udp_len;
     reg [15:0] rx_magic;
     reg [7:0]  rx_type;
     reg [7:0]  rx_flags;
     reg [31:0] rx_seq;
+    reg [15:0] rx_pay_len;
+    reg [15:0] exp_udp_len;
     begin
-        $display("[%0t] Verifying LUDP DATA packet (expecting seq=%08h)...", $time, exp_seq);
+        $display("[%0t] Verifying LUDP DATA packet (expecting seq=%08h, pay_len=%0d)...",
+                 $time, exp_seq, exp_pay_len);
         wait_for_tx_frame(5000);
 
         if (tx_capture_len < 3) begin
@@ -597,14 +611,16 @@ task verify_ludp_data;
 
         udp_src_port = {get_tx_byte(34), get_tx_byte(35)};
         udp_dst_port = {get_tx_byte(36), get_tx_byte(37)};
+        udp_len      = {get_tx_byte(38), get_tx_byte(39)};
 
-        rx_magic = {get_tx_byte(43), get_tx_byte(42)};
-        rx_type = get_tx_byte(44);
-        rx_flags = get_tx_byte(45);
-        rx_seq = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
+        rx_magic   = {get_tx_byte(43), get_tx_byte(42)};
+        rx_type    = get_tx_byte(44);
+        rx_flags   = get_tx_byte(45);
+        rx_seq     = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
+        rx_pay_len = {get_tx_byte(51), get_tx_byte(50)};
 
-        $display("[%0t] DATA: src_port=%0d dst_port=%0d magic=%04h type=%02h flags=%02h seq=%08h",
-                 $time, udp_src_port, udp_dst_port, rx_magic, rx_type, rx_flags, rx_seq);
+        $display("[%0t] DATA: src_port=%0d dst_port=%0d udp_len=%0d magic=%04h type=%02h flags=%02h seq=%08h hdr_pay_len=%0d",
+                 $time, udp_src_port, udp_dst_port, udp_len, rx_magic, rx_type, rx_flags, rx_seq, rx_pay_len);
 
         if (rx_magic !== MAGIC) begin
             $display("[%0t] ERROR: Magic mismatch: expected %04h, got %04h", $time, MAGIC, rx_magic);
@@ -620,6 +636,16 @@ task verify_ludp_data;
             $display("[%0t] ERROR: DATA seq expected %08h, got %08h", $time, exp_seq, rx_seq);
             error_count = error_count + 1;
         end else $display("[%0t] PASS: DATA seq correct (%08h)", $time, rx_seq);
+
+        // Verify UDP length: 8(UDP hdr) + 16(LUDP hdr) + payload
+        if (exp_pay_len > 0) begin
+            exp_udp_len = 8 + 16 + exp_pay_len;
+            if (udp_len !== exp_udp_len) begin
+                $display("[%0t] ERROR: UDP length mismatch: expected %0d, got %0d",
+                         $time, exp_udp_len, udp_len);
+                error_count = error_count + 1;
+            end else $display("[%0t] PASS: UDP length correct (%0d)", $time, udp_len);
+        end
     end
 endtask
 
@@ -634,6 +660,22 @@ task resolve_arp;
         reset_tx_capture();
         send_arp_reply();
         repeat(1000) @(posedge clk);
+    end
+endtask
+
+task reset_dut;
+    begin
+        $display("[%0t] Resetting DUT...", $time);
+        rst = 1;
+        sfp0_tx_rst = 1; sfp0_rx_rst = 1;
+        sfp1_tx_rst = 1; sfp1_rx_rst = 1;
+        repeat(20) @(posedge clk);
+        rst = 0;
+        sfp0_tx_rst = 0; sfp0_rx_rst = 0;
+        sfp1_tx_rst = 0; sfp1_rx_rst = 0;
+        $display("[%0t] Reset released", $time);
+        repeat(600) @(posedge clk);
+        resolve_arp();
     end
 endtask
 
@@ -706,9 +748,9 @@ initial begin
     // Each packet takes ~10 cycles in LUDP + ~780 cycles through pipeline
     repeat(2000) @(posedge clk);
 
-    // Verify the last captured frame should be seq=7
+    // Verify the last captured frame should be seq=7, payload=64 bytes
     if (tx_frame_count > 0)
-        verify_ludp_data(32'h7);
+        verify_ludp_data(32'h7, 16'd64);
     else begin
         $display("[%0t] ERROR: No data frames captured", $time);
         error_count = error_count + 1;
@@ -779,9 +821,73 @@ initial begin
     // The last captured frame should have seq = 8 + tx_frame_count - 1
     if (tx_frame_count > 0) begin
         $display("[%0t] INFO: Captured %0d data frames in Test 6", $time, tx_frame_count);
-        verify_ludp_data(32'h8 + tx_frame_count - 1);
+        verify_ludp_data(32'h8 + tx_frame_count - 1, 16'd64);
     end else begin
         $display("[%0t] ERROR: No data frame captured", $time);
+        error_count = error_count + 1;
+    end
+
+    // ============================================================
+    // Test 7: Jumbo frame (9KB) data transfer
+    // ============================================================
+    test_num = 7;
+    $display("");
+    $display("[%0t] ========================================", $time);
+    $display("[%0t] Test 7: Jumbo frame (9KB) data transfer", $time);
+    $display("[%0t] ========================================", $time);
+
+    // Reset DUT to flush stale FIFO data from previous test
+    reset_dut();
+
+    set_payload_size(16'd9000);
+    @(posedge clk);
+
+    reset_tx_capture();
+    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+    repeat(500) @(posedge clk);
+
+    // Send credit for 1 jumbo frame (absolute credit = current seq + 1)
+    reset_tx_capture();
+    send_ludp_credit(dut.ludp_tx_seq_num + 32'h1);
+
+    // Wait for jumbo frame transmission (9KB payload + headers ~1135 cycles)
+    wait_for_tx_frame(20000);
+
+    if (tx_frame_count > 0) begin
+        verify_ludp_data(dut.ludp_tx_seq_num - 32'h1, 16'd9000);
+    end else begin
+        $display("[%0t] ERROR: No jumbo frame captured", $time);
+        error_count = error_count + 1;
+    end
+
+    // ============================================================
+    // Test 8: Small tail frame (16 bytes) data transfer
+    // ============================================================
+    test_num = 8;
+    $display("");
+    $display("[%0t] ========================================", $time);
+    $display("[%0t] Test 8: Small tail frame (16 bytes)", $time);
+    $display("[%0t] ========================================", $time);
+
+    // Reset DUT to flush stale FIFO data from previous test
+    reset_dut();
+
+    set_payload_size(16'd16);
+    @(posedge clk);
+
+    reset_tx_capture();
+    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+    repeat(500) @(posedge clk);
+
+    // Send credit for 2 small frames (absolute credit = current seq + 2)
+    reset_tx_capture();
+    send_ludp_credit(dut.ludp_tx_seq_num + 32'h2);
+    repeat(2000) @(posedge clk);
+
+    if (tx_frame_count > 0) begin
+        verify_ludp_data(dut.ludp_tx_seq_num - 32'h1, 16'd16);
+    end else begin
+        $display("[%0t] ERROR: No small frame captured", $time);
         error_count = error_count + 1;
     end
 

@@ -255,6 +255,7 @@ wire        ludp_tx_data_axis_tvalid;
 wire        ludp_tx_data_axis_tready;
 wire        ludp_tx_data_axis_tlast;
 wire        ludp_tx_data_axis_tuser;
+wire [15:0] ludp_tx_data_payload_size;
 wire [31:0] ludp_tx_seq_num;
 wire [31:0] ludp_rx_credit_limit;
 wire        ludp_burst_active;
@@ -263,30 +264,41 @@ wire [31:0] ludp_packets_retx;
 wire [31:0] ludp_cmd_count;
 
 // Test data generator for ultrasonic data simulation
+// Supports variable payload sizes from 8 bytes up to jumbo frames
+// Payload size is configurable via test_data_payload_size_reg (in bytes)
 reg [63:0] test_data_reg = 0;
 reg        test_data_valid_reg = 0;
 reg        test_data_last_reg = 0;
-reg [7:0]  test_data_count_reg = 0;
+reg [15:0] test_data_count_reg = 0;
 reg        burst_active_dly = 0;
+reg [15:0] test_data_payload_size_reg = 64;  // Default 64 bytes, configurable
+wire       test_data_fifo_tready;
 
 always @(posedge clk) begin
     if (rst) begin
         test_data_reg <= 64'h0;
         test_data_valid_reg <= 1'b0;
         test_data_last_reg <= 1'b0;
-        test_data_count_reg <= 8'h0;
+        test_data_count_reg <= 16'h0;
         burst_active_dly <= 1'b0;
+        test_data_payload_size_reg <= 64;  // Default payload size
     end else begin
         burst_active_dly <= ludp_burst_active;
 
         if (ludp_burst_active) begin
             test_data_valid_reg <= 1'b1;
-            test_data_reg <= {test_data_count_reg, 56'h0};
-            test_data_count_reg <= test_data_count_reg + 1;
-            test_data_last_reg <= (test_data_count_reg[2:0] == 3'b111);
+            if (test_data_valid_reg && test_data_fifo_tready) begin
+                test_data_reg <= {test_data_count_reg[7:0], 56'h0};
+                test_data_last_reg <= (test_data_count_reg == (test_data_payload_size_reg/8 - 1));
+                if (test_data_count_reg == (test_data_payload_size_reg/8 - 1))
+                    test_data_count_reg <= 16'h0;
+                else
+                    test_data_count_reg <= test_data_count_reg + 1;
+            end
         end else begin
             test_data_valid_reg <= 1'b0;
             test_data_last_reg <= 1'b0;
+            test_data_count_reg <= 16'h0;
         end
     end
 end
@@ -321,7 +333,7 @@ ludp_tx_fifo_inst (
     .s_axis_tdata(test_data_reg),
     .s_axis_tkeep(8'hFF),
     .s_axis_tvalid(test_data_valid_reg),
-    .s_axis_tready(),
+    .s_axis_tready(test_data_fifo_tready),
     .s_axis_tlast(test_data_last_reg),
     .s_axis_tid(8'h0),
     .s_axis_tdest(8'h0),
@@ -351,6 +363,7 @@ assign ludp_tx_data_axis_tkeep  = ludp_tx_fifo_axis_tkeep;
 assign ludp_tx_data_axis_tvalid = ludp_tx_fifo_axis_tvalid;
 assign ludp_tx_data_axis_tlast  = ludp_tx_fifo_axis_tlast;
 assign ludp_tx_data_axis_tuser  = ludp_tx_fifo_axis_tuser;
+assign ludp_tx_data_payload_size = test_data_payload_size_reg;
 assign ludp_tx_fifo_axis_tready = ludp_tx_data_axis_tready;
 
 // LUDP Protocol Instance
@@ -386,6 +399,7 @@ ludp_protocol_inst (
     .tx_data_axis_tready(ludp_tx_data_axis_tready),
     .tx_data_axis_tlast(ludp_tx_data_axis_tlast),
     .tx_data_axis_tuser(ludp_tx_data_axis_tuser),
+    .tx_data_payload_size(ludp_tx_data_payload_size),
 
     .rx_udp_hdr_valid(rx_udp_hdr_valid),
     .rx_udp_hdr_ready(rx_udp_hdr_ready),
@@ -452,13 +466,17 @@ assign led = led_reg;
 assign sfp1_txd = 64'h0707070707070707;
 assign sfp1_txc = 8'hff;
 
+// Increase TX/RX FIFO depth to support jumbo frames (9KB+).
+// The default 4KB FIFO drops frames larger than half its depth
+// when FRAME_FIFO=1 and DROP_OVERSIZE_FRAME=1.
+// 32KB depth provides 16KB frame capacity, sufficient for 9KB payloads.
 eth_mac_10g_fifo #(
     .ENABLE_PADDING(1),
     .ENABLE_DIC(1),
     .MIN_FRAME_LENGTH(64),
-    .TX_FIFO_DEPTH(4096),
+    .TX_FIFO_DEPTH(32768),
     .TX_FRAME_FIFO(1),
-    .RX_FIFO_DEPTH(4096),
+    .RX_FIFO_DEPTH(32768),
     .RX_FRAME_FIFO(1)
 )
 eth_mac_10g_fifo_inst (
@@ -561,7 +579,14 @@ eth_axis_tx_inst (
     .busy()
 );
 
-udp_complete_64
+// Disable UDP checksum generation to support jumbo frames.
+// The checksum generator's internal payload FIFO (2KB) cannot hold
+// 9KB jumbo frames, causing backpressure that stalls transmission.
+// UDP checksum is optional in IPv4; setting it to 0 is valid.
+// MAC-layer FCS and LUDP's magic number provide sufficient integrity.
+udp_complete_64 #(
+    .UDP_CHECKSUM_GEN_ENABLE(0)
+)
 udp_complete_inst (
     .clk(clk),
     .rst(rst),
