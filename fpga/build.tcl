@@ -23,6 +23,7 @@ set SYN_FILES [list \
     "mini_corundum/rtl/eth_xcvr_phy_quad_wrapper.v" \
     "mini_corundum/rtl/debounce_switch.v" \
     "mini_corundum/rtl/sync_signal.v" \
+    "mini_corundum/rtl/ludp_protocol.sv" \
     "corundum/fpga/lib/eth/rtl/eth_mac_10g_fifo.v" \
     "corundum/fpga/lib/eth/rtl/eth_mac_10g.v" \
     "corundum/fpga/lib/eth/rtl/axis_xgmii_rx_64.v" \

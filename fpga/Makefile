@@ -10,6 +10,7 @@ SYN_FILES += rtl/eth_xcvr_phy_wrapper.v
 SYN_FILES += rtl/eth_xcvr_phy_quad_wrapper.v
 SYN_FILES += rtl/debounce_switch.v
 SYN_FILES += rtl/sync_signal.v
+SYN_FILES += rtl/ludp_protocol.sv
 SYN_FILES += lib/eth/rtl/eth_mac_10g_fifo.v
 SYN_FILES += lib/eth/rtl/eth_mac_10g.v
 SYN_FILES += lib/eth/rtl/axis_xgmii_rx_64.v
