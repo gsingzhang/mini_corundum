@@ -250,6 +250,12 @@ initial begin
         end
     end
 
+    // Final check for any remaining TX frames
+    repeat(1000) @(posedge clk);
+    if (tx_frame_count > 0) begin
+        $display("[%0t] DPI: Final TX frame detected (count=%0d)", $time, tx_frame_count);
+    end
+
     $display("[%0t] Simulation complete", $time);
 
     $display("========================================");

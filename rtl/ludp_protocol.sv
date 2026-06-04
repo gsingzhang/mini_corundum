@@ -442,15 +442,15 @@ module ludp_protocol #(
 
             case (state_reg)
                 STATE_IDLE: begin
-                    // Clear TX control flags
-                    tx_hdr_sent_reg           <= 0;
-                    tx_beat_count_reg         <= 0;
-                    tx_payload_bytes_sent_reg <= 0;
+                // Clear TX control flags
+                tx_hdr_sent_reg           <= 0;
+                tx_beat_count_reg         <= 0;
+                tx_payload_bytes_sent_reg <= 0;
 
-                    if (rx_pkt_valid_reg) begin
-                        // Process packet received in previous RX_CMD state
-                        rx_pkt_valid_reg <= 1'b0;
-                        if (rx_pkt_magic_reg == MAGIC) begin
+                if (rx_pkt_valid_reg) begin
+                    // Process packet received in previous RX_CMD state
+                    rx_pkt_valid_reg <= 1'b0;
+                    if (rx_pkt_magic_reg == MAGIC) begin
                             case (rx_pkt_type_reg)
                                 TYPE_CMD: begin
                                     // Decode command fields
@@ -523,6 +523,7 @@ module ludp_protocol #(
                         tx_hdr_sent_reg   <= 0;
                         tx_beat_count_reg <= 0;
                         tx_is_data_reg    <= 1'b0;
+                        $display("[%0t] LUDP: Preparing response opcode=%04h", $time, resp_opcode_reg);
                         if (resp_is_cpl_reg) begin
                             // Command completion response
                             tx_header_beat0_reg <= {resp_cmd_id_reg, resp_status_reg, TYPE_CMD_CPL, MAGIC};
@@ -580,6 +581,7 @@ module ludp_protocol #(
                             rx_pkt_arg1_reg     <= rx_pkt_arg1;
                             rx_pkt_arg2_reg     <= rx_pkt_arg2;
                             rx_pkt_valid_reg    <= 1'b1;
+                            $display("[%0t] LUDP: RX parsed magic=%04h type=%02h opcode=%04h", $time, rx_pkt_magic, rx_pkt_type, rx_pkt_opcode);
                         end
                     end
                 end
@@ -618,6 +620,7 @@ module ludp_protocol #(
                     // Track UDP header handshake
                     if (!tx_hdr_sent_reg && tx_udp_hdr_ready) begin
                         tx_hdr_sent_reg <= 1'b1;
+                        $display("[%0t] LUDP: TX resp header ready", $time);
                     end
 
                     // Count payload beats and clear response valid on completion
@@ -625,6 +628,7 @@ module ludp_protocol #(
                         tx_beat_count_reg <= tx_beat_count_reg + 1;
                         if (tx_udp_payload_axis_tlast) begin
                             resp_valid_reg <= 1'b0;
+                            $display("[%0t] LUDP: TX resp complete", $time);
                         end
                     end
                 end

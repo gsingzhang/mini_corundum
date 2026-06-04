@@ -111,6 +111,10 @@ module icmp_echo_reply #(
 
     state_t state_reg, state_next;
 
+    // Pending TX flag: set when ICMP reply is ready but TX path is blocked
+    // This prevents deadlock with ip_arb_mux when ARP cache is empty
+    logic pending_tx_reg, pending_tx_next;
+
     // Registers for captured packet info
     logic [47:0] rx_eth_src_mac_reg;
     logic [31:0] rx_source_ip_reg;
@@ -166,10 +170,15 @@ module icmp_echo_reply #(
     // Next state logic
     always_comb begin
         state_next = state_reg;
+        pending_tx_next = pending_tx_reg;
 
         case (state_reg)
             STATE_IDLE: begin
-                if (s_ip_hdr_valid && s_ip_hdr_ready) begin
+                if (pending_tx_reg) begin
+                    // Retry pending TX - go directly to TX_PAYLOAD
+                    // m_ip_hdr_valid will be set, and we assume m_ip_hdr_ready will be asserted
+                    state_next = STATE_TX_PAYLOAD;
+                end else if (s_ip_hdr_valid && s_ip_hdr_ready) begin
                     if (is_icmp_protocol) begin
                         // Go to RX_PAYLOAD to inspect first real payload beat
                         state_next = STATE_RX_PAYLOAD;
@@ -201,13 +210,21 @@ module icmp_echo_reply #(
             end
 
             STATE_TX_HEADER: begin
-                if (m_ip_hdr_valid && m_ip_hdr_ready)
+                if (m_ip_hdr_valid && m_ip_hdr_ready) begin
                     state_next = STATE_TX_PAYLOAD;
+                    pending_tx_next = 1'b0;
+                end else if (!m_ip_hdr_ready) begin
+                    // TX path blocked (e.g. ARP cache empty), release arbiter and retry later
+                    state_next = STATE_IDLE;
+                    pending_tx_next = 1'b1;
+                end
             end
 
             STATE_TX_PAYLOAD: begin
-                if (m_ip_payload_axis_tvalid && m_ip_payload_axis_tready && m_ip_payload_axis_tlast)
+                if (m_ip_payload_axis_tvalid && m_ip_payload_axis_tready && m_ip_payload_axis_tlast) begin
                     state_next = STATE_IDLE;
+                    pending_tx_next = 1'b0;
+                end
             end
 
             STATE_PASS_THROUGH: begin
@@ -215,7 +232,10 @@ module icmp_echo_reply #(
                     state_next = STATE_IDLE;
             end
 
-            default: state_next = STATE_IDLE;
+            default: begin
+                state_next = STATE_IDLE;
+                pending_tx_next = 1'b0;
+            end
         endcase
     end
 
@@ -251,7 +271,7 @@ module icmp_echo_reply #(
     assign m_ip_pass_payload_axis_tuser = s_ip_payload_axis_tuser;
 
     // TX reply outputs (for ICMP echo reply)
-    assign m_ip_hdr_valid = (state_reg == STATE_TX_HEADER);
+    assign m_ip_hdr_valid = (state_reg == STATE_TX_HEADER) || (state_reg == STATE_TX_PAYLOAD && pending_tx_reg);
     assign m_ip_dscp = 6'd0;
     assign m_ip_ecn = 2'd0;
     assign m_ip_length = rx_ip_length_reg;
@@ -302,11 +322,13 @@ module icmp_echo_reply #(
             rx_payload_tlast_reg <= 1'b0;
             rx_payload_tkeep_reg <= 8'h00;
             rx_done_reg <= 1'b0;
+            pending_tx_reg <= 1'b0;
             payload_buf_wr_ptr <= '0;
             payload_buf_rd_ptr <= '0;
             payload_buf_count <= '0;
         end else begin
             state_reg <= state_next;
+            pending_tx_reg <= pending_tx_next;
 
             if (state_reg == STATE_IDLE && s_ip_hdr_valid && s_ip_hdr_ready) begin
                 // Capture IP header info
@@ -372,6 +394,12 @@ module icmp_echo_reply #(
 
             if (state_reg == STATE_TX_HEADER && m_ip_hdr_valid && m_ip_hdr_ready) begin
                 $display("[%0t] ICMP: TX header accepted, dest_ip=%08h", $time, m_ip_dest_ip);
+            end
+            if (state_reg == STATE_TX_HEADER && !m_ip_hdr_ready) begin
+                $display("[%0t] ICMP: TX blocked, releasing arbiter, pending_tx=1", $time);
+            end
+            if (state_reg == STATE_IDLE && pending_tx_reg && m_ip_hdr_ready) begin
+                $display("[%0t] ICMP: Retrying pending TX", $time);
             end
 
             if (state_reg == STATE_TX_PAYLOAD && m_ip_payload_axis_tvalid && m_ip_payload_axis_tready) begin
