@@ -1,5 +1,14 @@
 # VCS Makefile for fpga_core DPI-C co-simulation (FIFO-based)
 # This Makefile builds and runs the testbench with Python co-simulation
+#
+# Waveform support:
+#   make sim-ludp-full           - Batch sim (no waveform)
+#   make sim-ludp-full-vcd       - VCD waveform (may work in sandbox)
+#   make sim-ludp-full-vpd       - VPD waveform for DVE (needs non-sandbox)
+#   make sim-ludp-full-fsdb      - FSDB waveform for Verdi (needs non-sandbox)
+#
+# NOTE: FSDB/VPD dumpers require /proc access and will segfault in
+# sandboxed environments. Use VCD or run on a non-sandboxed machine.
 
 # Testbench settings
 TB_TOP = tb_fpga_core_dpi
@@ -63,7 +72,19 @@ DPI_C_SOURCES = dpi_safe.c
 
 # VCS settings
 VCS = vcs
-VCS_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
+# Base flags: no -kdb to avoid Verdi PLI auto-link (causes segfault in sandbox)
+VCS_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
+    -debug_access+all \
+    +v2k \
+    +libext+.v+.sv \
+    -CFLAGS "-DVCS" \
+    -f filelist_dpi.f \
+    -top $(TB_TOP) \
+    -o simv_dpi
+
+# FSDB/Verdi compile flags (adds -kdb for KDB database)
+# NOTE: Must run with VERDI_HOME set on a non-sandboxed machine
+VCS_FSDB_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
     -debug_access+all -kdb \
     +v2k \
     +libext+.v+.sv \
@@ -82,7 +103,10 @@ SIMV = ./simv_dpi
 # Python client
 PYTHON_CLIENT = ../sw/ludp_host_fifo.py
 
-.PHONY: all compile sim sim-arp sim-icmp sim-ludp clean
+.PHONY: all compile compile-vcd compile-vpd compile-fsdb \
+        sim sim-arp sim-icmp sim-ludp-start sim-ludp-credit sim-ludp-full \
+        sim-ludp-full-vcd sim-ludp-full-vpd sim-ludp-full-fsdb \
+        clean
 
 all: sim
 
@@ -92,38 +116,48 @@ filelist_dpi.f: Makefile.dpi
 	@rm -f filelist_dpi.f
 	@for f in $(VERILOG_SOURCES); do echo "$$f" >> filelist_dpi.f; done
 
-# Compile with DPI-C
+# Compile targets (different waveform defines)
 compile: filelist_dpi.f
-	$(VCS) $(VCS_FLAGS) $(DPI_FLAGS)
+	$(VCS) $(VCS_BASE_FLAGS) $(DPI_FLAGS)
 
-# Run simulation with ARP packet
+compile-vcd: filelist_dpi.f
+	$(VCS) $(VCS_BASE_FLAGS) +define+VCD_DUMP $(DPI_FLAGS)
+
+compile-vpd: filelist_dpi.f
+	$(VCS) $(VCS_BASE_FLAGS) +define+VPD_DUMP $(DPI_FLAGS)
+
+compile-fsdb: filelist_dpi.f
+	$(VCS) $(VCS_FSDB_FLAGS) +define+FSDB_DUMP $(DPI_FLAGS)
+
+# --- Packet generation helper ---
+define gen_packets
+	@rm -rf /tmp/ludp_dpi_fifo
+	@python3 $(PYTHON_CLIENT) --packet-type $(1)
+endef
+
+# --- Basic simulation targets (no waveform) ---
+
 sim-arp: compile
 	@echo "========================================"
 	@echo "Running DPI-C simulation with ARP"
 	@echo "========================================"
-	@rm -rf /tmp/ludp_dpi_fifo
-	@python3 $(PYTHON_CLIENT) --packet-type arp
+	$(call gen_packets,arp)
 	$(SIMV) -no_save
 
-# Run simulation with ICMP packet
 sim-icmp: compile
 	@echo "========================================"
 	@echo "Running DPI-C simulation with ICMP"
 	@echo "========================================"
-	@rm -rf /tmp/ludp_dpi_fifo
-	@python3 $(PYTHON_CLIENT) --packet-type icmp
+	$(call gen_packets,icmp)
 	$(SIMV) -no_save
 
-# Run simulation with LUDP START
 sim-ludp-start: compile
 	@echo "========================================"
 	@echo "Running DPI-C simulation with LUDP START"
 	@echo "========================================"
-	@rm -rf /tmp/ludp_dpi_fifo
-	@python3 $(PYTHON_CLIENT) --packet-type ludp_start
+	$(call gen_packets,ludp_start)
 	$(SIMV) -no_save
 
-# Run simulation with LUDP CREDIT
 sim-ludp-credit: compile
 	@echo "========================================"
 	@echo "Running DPI-C simulation with LUDP CREDIT"
@@ -133,16 +167,72 @@ sim-ludp-credit: compile
 	@python3 $(PYTHON_CLIENT) --packet-type ludp_credit
 	$(SIMV) -no_save
 
-# Run simulation with full LUDP sequence
 sim-ludp-full: compile
 	@echo "========================================"
 	@echo "Running DPI-C simulation with full LUDP"
 	@echo "========================================"
-	@rm -rf /tmp/ludp_dpi_fifo
-	@python3 $(PYTHON_CLIENT) --packet-type ludp_full
+	$(call gen_packets,ludp_full)
 	$(SIMV) -no_save
 
-# Run simulation (default - just wait for packet file)
+# --- Waveform simulation targets ---
+
+# VCD waveform (simplest format, may work in sandbox)
+sim-ludp-full-vcd: compile-vcd
+	@echo "========================================"
+	@echo "Running DPI-C simulation with VCD waveform"
+	@echo "========================================"
+	$(call gen_packets,ludp_full)
+	$(SIMV) -no_save -l sim-ludp-full-vcd.log
+	@if [ -f simv_dpi.vcd ]; then \
+		echo ""; \
+		echo "VCD waveform generated: simv_dpi.vcd"; \
+		echo "View with: gtkwave simv_dpi.vcd &"; \
+		echo "Or convert for Verdi: vcd2fsdb simv_dpi.vcd simv_dpi.fsdb"; \
+	else \
+		echo "WARNING: VCD file not generated."; \
+	fi
+
+# VPD waveform for DVE (needs non-sandboxed environment)
+sim-ludp-full-vpd: compile-vpd
+	@echo "========================================"
+	@echo "Running DPI-C simulation with VPD waveform"
+	@echo "NOTE: VPD may segfault in sandboxed environments"
+	@echo "========================================"
+	$(call gen_packets,ludp_full)
+	$(SIMV) -no_save -l sim-ludp-full-vpd.log || true
+	@if [ -f simv_dpi.vpd ]; then \
+		echo ""; \
+		echo "VPD waveform generated: simv_dpi.vpd"; \
+		echo "View with: dve -vpd simv_dpi.vpd &"; \
+	else \
+		echo "WARNING: VPD file not generated (sandbox /proc restriction)."; \
+		echo "Run on a non-sandboxed machine for VPD support."; \
+	fi
+
+# FSDB waveform for Verdi (needs non-sandboxed environment)
+# Run this on a machine with full /proc access and VERDI_HOME set
+sim-ludp-full-fsdb: compile-fsdb
+	@echo "========================================"
+	@echo "Running DPI-C simulation with FSDB waveform"
+	@echo "========================================"
+	$(call gen_packets,ludp_full)
+	$(SIMV) -no_save -l sim-ludp-full-fsdb.log || true
+	@if [ -f simv_dpi.fsdb ]; then \
+		echo ""; \
+		echo "FSDB waveform generated: simv_dpi.fsdb"; \
+		echo "View with: verdi -ssf simv_dpi.fsdb -dbdir simv_dpi.daidir &"; \
+	else \
+		echo ""; \
+		echo "FSDB file not generated."; \
+		echo "This is expected in sandboxed environments (no /proc access)."; \
+		echo ""; \
+		echo "To generate FSDB on a non-sandboxed machine:"; \
+		echo "  1. export VERDI_HOME=/path/to/verdi"; \
+		echo "  2. make -f Makefile.dpi clean"; \
+		echo "  3. make -f Makefile.dpi sim-ludp-full-fsdb"; \
+	fi
+
+# Default simulation (no waveform)
 sim: compile
 	@echo "========================================"
 	@echo "Starting DPI-C simulation"

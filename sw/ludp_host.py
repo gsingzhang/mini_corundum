@@ -143,6 +143,7 @@ class LudpHost:
         credit_poll_ms: float = 50.0,
         cmd_timeout_ms: float = 100.0,
         on_data: Optional[Callable[[LudpDataPacket], None]] = None,
+        debug: bool = False,
     ):
         self.fpga_ip = fpga_ip
         self.fpga_addr = (fpga_ip, LUDP_PORT)
@@ -153,6 +154,7 @@ class LudpHost:
         self.credit_poll_ms = credit_poll_ms
         self.cmd_timeout_ms = cmd_timeout_ms
         self.on_data = on_data
+        self.debug = debug
 
         # Socket setup
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -297,6 +299,9 @@ class LudpHost:
 
         self.sock.sendto(pkt, self.fpga_addr)
 
+        if self.debug:
+            print(f"[DEBUG TX] {len(pkt)}B to {self.fpga_addr}: {pkt.hex()}")
+
         success = self.pending_cmds[cmd_id]["event"].wait(
             timeout=self.cmd_timeout_ms / 1000.0
         )
@@ -349,12 +354,19 @@ class LudpHost:
             except OSError:
                 break  # Socket closed
 
+            if self.debug:
+                print(f"[DEBUG RX] {len(data)}B from {addr}: {data.hex()}")
+
             if len(data) < LUDP_HDR_LEN:
+                if self.debug:
+                    print(f"[DEBUG RX] Too short ({len(data)}B), expected >= {LUDP_HDR_LEN}")
                 continue
 
             # Parse header (LUDP uses little-endian byte order on the wire)
             magic = struct.unpack("<H", data[0:2])[0]
             if magic != LUDP_MAGIC:
+                if self.debug:
+                    print(f"[DEBUG RX] Bad magic: 0x{magic:04x}, expected 0x{LUDP_MAGIC:04x}")
                 continue
 
             pkt_type = data[2]
@@ -442,8 +454,14 @@ class LudpHost:
     def _handle_cmd_ack(self, data: bytes) -> None:
         """Handle CMD_ACK from FPGA."""
         if len(data) < 12:
+            if self.debug:
+                print(f"[DEBUG CMD_ACK] Too short: {len(data)}B")
             return
         cmd_id = struct.unpack("<I", data[4:8])[0]
+        if self.debug:
+            status = data[3]
+            opcode = struct.unpack("<H", data[8:10])[0] if len(data) >= 10 else 0
+            print(f"[DEBUG CMD_ACK] cmd_id={cmd_id} status={status} opcode=0x{opcode:04x} pending={list(self.pending_cmds.keys())}")
         with self.lock:
             if cmd_id in self.pending_cmds:
                 self.pending_cmds[cmd_id]["response"] = data
@@ -516,6 +534,8 @@ def main():
     parser.add_argument("--mode", choices=["logger", "interactive"], default="logger", help="Run mode")
     parser.add_argument("--window-size", type=int, default=DEFAULT_WINDOW_SIZE, help="Credit window size")
     parser.add_argument("--credit-interval", type=int, default=DEFAULT_CREDIT_INTERVAL, help="Credit interval")
+    parser.add_argument("--timeout", type=float, default=100.0, help="CMD timeout in ms")
+    parser.add_argument("--debug", action="store_true", help="Enable debug output (hex dump all packets)")
     args = parser.parse_args()
 
     if args.mode == "logger":
@@ -538,6 +558,8 @@ def run_logger(args):
         window_size=args.window_size,
         credit_interval=args.credit_interval,
         on_data=on_data,
+        cmd_timeout_ms=args.timeout,
+        debug=args.debug,
     )
 
     host.start()
@@ -574,6 +596,8 @@ def run_interactive(args):
         local_port=args.port,
         window_size=args.window_size,
         credit_interval=args.credit_interval,
+        cmd_timeout_ms=args.timeout,
+        debug=args.debug,
     )
 
     host.start()

@@ -226,6 +226,11 @@ module ludp_protocol #(
     logic [15:0] rx_pkt_arg2_reg;
     logic        rx_pkt_valid_reg;
 
+    // Last RX source address (captured from UDP header for response routing)
+    logic [47:0] rx_src_mac_reg;
+    logic [31:0] rx_src_ip_reg;
+    logic [15:0] rx_src_port_reg;
+
     // Flow control: allow TX when burst is active and we have credit
     wire can_send = burst_active_reg && (seq_num_reg < abs_credit_reg);
 
@@ -317,10 +322,14 @@ module ludp_protocol #(
     assign tx_udp_ip_ecn     = 2'h0;
     assign tx_udp_ip_ttl     = 8'd64;
     assign tx_udp_ip_source_ip = local_ip;
-    assign tx_udp_ip_dest_ip   = host_ip;
+    // Use captured source IP from last RX packet for response routing,
+    // fallback to configured host_ip for data packets (no prior RX)
+    assign tx_udp_ip_dest_ip   = (rx_src_ip_reg != 32'h0) ? rx_src_ip_reg : host_ip;
     assign tx_udp_checksum   = 16'h0;
     assign tx_udp_source_port = udp_port;
-    assign tx_udp_dest_port   = udp_port;
+    // Use captured source port from last RX packet for response routing,
+    // fallback to configured udp_port for data packets
+    assign tx_udp_dest_port   = (rx_src_port_reg != 16'h0) ? rx_src_port_reg : udp_port;
 
     // TX UDP length: dynamically calculated based on actual payload size
     // UDP length = 8 (UDP header) + 16 (LUDP header) + payload_bytes
@@ -436,6 +445,9 @@ module ludp_protocol #(
             rx_pkt_arg1_reg         <= 0;
             rx_pkt_arg2_reg         <= 0;
             rx_pkt_valid_reg        <= 0;
+            rx_src_mac_reg          <= 0;
+            rx_src_ip_reg           <= 0;
+            rx_src_port_reg         <= 0;
         end else begin
             // Default: clear command valid (pulse for one cycle)
             cmd_valid_reg <= 1'b0;
@@ -513,17 +525,20 @@ module ludp_protocol #(
                             endcase
                         end
                     end else if (rx_udp_hdr_valid && rx_udp_hdr_ready) begin
-                        // Prepare for new RX packet
-                        rx_magic_reg <= 0;
-                        rx_type_reg  <= 0;
-                        rx_flags_reg <= 0;
-                        rx_seq_reg   <= 0;
+                        // Prepare for new RX packet - capture source address for response routing
+                        rx_magic_reg    <= 0;
+                        rx_type_reg     <= 0;
+                        rx_flags_reg    <= 0;
+                        rx_seq_reg      <= 0;
+                        rx_src_mac_reg  <= rx_udp_eth_src_mac;
+                        rx_src_ip_reg   <= rx_udp_ip_source_ip;
+                        rx_src_port_reg <= rx_udp_source_port;
                     end else if (resp_valid_reg) begin
                         // Prepare response packet header (fixed 24-byte UDP payload)
                         tx_hdr_sent_reg   <= 0;
                         tx_beat_count_reg <= 0;
                         tx_is_data_reg    <= 1'b0;
-                        $display("[%0t] LUDP: Preparing response opcode=%04h", $time, resp_opcode_reg);
+                        $display("[%0t] LUDP: Preparing response opcode=%04h dest_ip=%08h dest_port=%0d", $time, resp_opcode_reg, rx_src_ip_reg, rx_src_port_reg);
                         if (resp_is_cpl_reg) begin
                             // Command completion response
                             tx_header_beat0_reg <= {resp_cmd_id_reg, resp_status_reg, TYPE_CMD_CPL, MAGIC};

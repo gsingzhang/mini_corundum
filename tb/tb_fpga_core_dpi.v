@@ -207,6 +207,28 @@ task feed_packet_from_dpi;
     end
 endtask
 
+`ifdef VPD_DUMP
+initial begin
+    $vcdplusfile("simv_dpi.vpd");
+    $vcdpluson();
+end
+`endif
+
+`ifdef FSDB_DUMP
+initial begin
+    $fsdbDumpfile("simv_dpi.fsdb");
+    $fsdbDumpvars(0, tb_fpga_core_dpi);
+    $fsdbDumpMDA();
+end
+`endif
+
+`ifdef VCD_DUMP
+initial begin
+    $dumpfile("simv_dpi.vcd");
+    $dumpvars(0, tb_fpga_core_dpi);
+end
+`endif
+
 // Main test sequence
 initial begin
     integer timeout;
