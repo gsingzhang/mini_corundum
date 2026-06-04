@@ -24,6 +24,7 @@ set SYN_FILES [list \
     "mini_corundum/rtl/debounce_switch.v" \
     "mini_corundum/rtl/sync_signal.v" \
     "mini_corundum/rtl/ludp_protocol.sv" \
+    "mini_corundum/rtl/icmp_echo_reply.sv" \
     "corundum/fpga/lib/eth/rtl/eth_mac_10g_fifo.v" \
     "corundum/fpga/lib/eth/rtl/eth_mac_10g.v" \
     "corundum/fpga/lib/eth/rtl/axis_xgmii_rx_64.v" \

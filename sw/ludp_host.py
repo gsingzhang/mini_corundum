@@ -95,7 +95,7 @@ class LudpStats:
     @property
     def throughput_mbps(self) -> float:
         """Calculate throughput in Mbps."""
-        elapsed = time.time() - self.start_time
+        elapsed = time.time() - self.stats.start_time
         if elapsed <= 0:
             return 0.0
         return (self.bytes_received * 8) / (elapsed * 1e6)
@@ -103,13 +103,13 @@ class LudpStats:
     @property
     def packet_rate_kpps(self) -> float:
         """Calculate packet rate in kpps."""
-        elapsed = time.time() - self.start_time
+        elapsed = time.time() - self.stats.start_time
         if elapsed <= 0:
             return 0.0
         return self.packets_received / (elapsed * 1000)
 
     def __str__(self) -> str:
-        elapsed = time.time() - self.start_time
+        elapsed = time.time() - self.stats.start_time
         return (
             f"Stats: {self.packets_processed} processed, "
             f"{self.packets_out_of_order} OOO, "
@@ -194,10 +194,13 @@ class LudpHost:
         if cmd_id is None:
             cmd_id = self.next_cmd_id
             self.next_cmd_id += 1
-        # LUDP uses little-endian byte order for multi-byte fields
-        # (matches FPGA AXI-Stream lane ordering)
+        # LUDP header fields are transmitted in big-endian byte order on the wire.
+        # The FPGA receives bytes via XGMII and assembles them into 64-bit words
+        # where the first byte goes into bits [7:0]. For a 16-bit magic number,
+        # byte0 (MSB) at tdata[15:8] and byte1 (LSB) at tdata[7:0] gives the
+        # correct value 0xDA01 when read as tdata[15:0].
         return struct.pack(
-            "<HBBIHIH",
+            ">HBBIHIH",
             LUDP_MAGIC,
             PKT_CMD,
             flags,
@@ -210,7 +213,7 @@ class LudpHost:
     def _build_credit(self, abs_credit: int) -> bytes:
         """Build a CREDIT packet (16 bytes)."""
         return struct.pack(
-            "<HBBIHIH",
+            ">HBBIHIH",
             LUDP_MAGIC,
             PKT_CREDIT,
             0x00,
@@ -223,7 +226,7 @@ class LudpHost:
     def _build_nack(self, miss_seq: int, count: int = 1) -> bytes:
         """Build a NACK packet (16 bytes)."""
         return struct.pack(
-            "<HBBIHIH",
+            ">HBBIHIH",
             LUDP_MAGIC,
             PKT_NACK,
             0x00,
@@ -269,8 +272,8 @@ class LudpHost:
                 resp = self.pending_cmds[cmd_id]["response"]
                 del self.pending_cmds[cmd_id]
             if resp and len(resp) >= 16:
-                # Parse CMD_CPL: Read_Data at offset 10 (32-bit, little-endian)
-                read_data = struct.unpack("<I", resp[10:14])[0]
+                # Parse CMD_CPL: Read_Data at offset 10 (32-bit, big-endian)
+                read_data = struct.unpack(">I", resp[10:14])[0]
                 return read_data
         else:
             with self.lock:
@@ -349,8 +352,8 @@ class LudpHost:
             if len(data) < LUDP_HDR_LEN:
                 continue
 
-            # Parse header (LUDP uses little-endian byte order)
-            magic = struct.unpack("<H", data[0:2])[0]
+            # Parse header (LUDP uses big-endian byte order on the wire)
+            magic = struct.unpack(">H", data[0:2])[0]
             if magic != LUDP_MAGIC:
                 continue
 
@@ -370,12 +373,12 @@ class LudpHost:
             return
 
         pkt = LudpDataPacket(
-            magic=struct.unpack("<H", data[0:2])[0],
+            magic=struct.unpack(">H", data[0:2])[0],
             pkt_type=data[2],
             flags=data[3],
-            seq_num=struct.unpack("<I", data[4:8])[0],
-            payload_len=struct.unpack("<H", data[8:10])[0],
-            timestamp=struct.unpack("<I", data[10:14])[0],
+            seq_num=struct.unpack(">I", data[4:8])[0],
+            payload_len=struct.unpack(">H", data[8:10])[0],
+            timestamp=struct.unpack(">I", data[10:14])[0],
             payload=data[LUDP_HDR_LEN:],
         )
 
@@ -440,7 +443,7 @@ class LudpHost:
         """Handle CMD_ACK from FPGA."""
         if len(data) < 12:
             return
-        cmd_id = struct.unpack("<I", data[4:8])[0]
+        cmd_id = struct.unpack(">I", data[4:8])[0]
         with self.lock:
             if cmd_id in self.pending_cmds:
                 self.pending_cmds[cmd_id]["response"] = data
@@ -450,7 +453,7 @@ class LudpHost:
         """Handle CMD_CPL from FPGA."""
         if len(data) < 16:
             return
-        cmd_id = struct.unpack("<I", data[4:8])[0]
+        cmd_id = struct.unpack(">I", data[4:8])[0]
         with self.lock:
             if cmd_id in self.pending_cmds:
                 self.pending_cmds[cmd_id]["response"] = data
@@ -501,39 +504,39 @@ class LudpHost:
 
 
 # ============================================================================
-# Example Application: Data Logger
+# Main Entry Point
 # ============================================================================
 
-def run_data_logger(args: argparse.Namespace) -> None:
-    """
-    Example application: Start acquisition, receive data, log to file.
-    """
-    # Open output file if specified
-    outfile = None
-    if args.output:
-        outfile = open(args.output, "wb")
-        print(f"[APP] Writing raw payload data to {args.output}")
+def main():
+    parser = argparse.ArgumentParser(description="LUDP Host Application")
+    parser.add_argument("--fpga-ip", required=True, help="FPGA IP address")
+    parser.add_argument("--port", type=int, default=LUDP_PORT, help="UDP port")
+    parser.add_argument("--duration", type=float, default=10.0, help="Acquisition duration in seconds")
+    parser.add_argument("-o", "--output", default="data.bin", help="Output file for raw data")
+    parser.add_argument("--mode", choices=["logger", "interactive"], default="logger", help="Run mode")
+    parser.add_argument("--window-size", type=int, default=DEFAULT_WINDOW_SIZE, help="Credit window size")
+    parser.add_argument("--credit-interval", type=int, default=DEFAULT_CREDIT_INTERVAL, help="Credit interval")
+    args = parser.parse_args()
 
-    # Statistics tracking
-    seq_log: List[int] = []
-    timestamp_log: List[int] = []
+    if args.mode == "logger":
+        run_logger(args)
+    else:
+        run_interactive(args)
 
-    def on_data(pkt: LudpDataPacket) -> None:
-        """Callback for each received in-order DATA packet."""
-        if outfile:
-            outfile.write(pkt.payload)
-            outfile.flush()
-        seq_log.append(pkt.seq_num)
-        timestamp_log.append(pkt.timestamp)
 
-    # Create LUDP host
+def run_logger(args):
+    """Data logger mode: receive data for a fixed duration."""
+    output_file = open(args.output, "wb")
+    print(f"[APP] Writing raw payload data to {args.output}")
+
+    def on_data(pkt: LudpDataPacket):
+        output_file.write(pkt.payload)
+
     host = LudpHost(
         fpga_ip=args.fpga_ip,
-        local_port=args.local_port,
+        local_port=args.port,
         window_size=args.window_size,
         credit_interval=args.credit_interval,
-        nack_timeout_ms=args.nack_timeout,
-        credit_poll_ms=args.credit_poll,
         on_data=on_data,
     )
 
@@ -543,70 +546,38 @@ def run_data_logger(args: argparse.Namespace) -> None:
     if not host.send_start():
         print("[APP] Failed to start acquisition. Exiting.")
         host.stop()
-        if outfile:
-            outfile.close()
-        return
+        output_file.close()
+        sys.exit(1)
 
     # Send initial credit
-    host.send_credit(args.window_size)
+    host.send_credit(host.abs_credit)
 
     # Run for specified duration
-    print(f"[APP] Receiving data for {args.duration} seconds...")
-    try:
-        for i in range(args.duration):
-            time.sleep(1.0)
-            stats = host.get_stats()
-            print(f"[APP] {stats}")
-    except KeyboardInterrupt:
-        print("\n[APP] Interrupted by user.")
+    time.sleep(args.duration)
 
-    # Send STOP command
+    # Send STOP
     host.send_stop()
 
-    # Final stats
+    # Print stats
     stats = host.get_stats()
-    print(f"\n[APP] Final Statistics:")
-    print(f"  Total packets received: {stats.packets_received}")
-    print(f"  Total packets processed: {stats.packets_processed}")
-    print(f"  Out-of-order packets: {stats.packets_out_of_order}")
-    print(f"  Retransmitted packets: {stats.packets_retransmitted}")
-    print(f"  NACKs sent: {stats.nacks_sent}")
-    print(f"  Credits sent: {stats.credits_sent}")
-    print(f"  Gaps detected: {stats.gap_count}")
-    print(f"  Total bytes: {stats.bytes_received}")
-    print(f"  Average throughput: {stats.throughput_mbps:.1f} Mbps")
-    print(f"  Average packet rate: {stats.packet_rate_kpps:.1f} kpps")
-
-    if seq_log:
-        print(f"  Sequence range: {seq_log[0]} -> {seq_log[-1]}")
-        expected_count = seq_log[-1] - seq_log[0] + 1
-        actual_count = len(set(seq_log))
-        if expected_count != actual_count:
-            print(f"  WARNING: Missing {expected_count - actual_count} packets!")
+    print(f"[APP] {stats}")
 
     host.stop()
-    if outfile:
-        outfile.close()
-        print(f"[APP] Data saved to {args.output}")
+    output_file.close()
+    print(f"[APP] Data saved to {args.output}")
 
 
-# ============================================================================
-# Example Application: Interactive Shell
-# ============================================================================
-
-def run_interactive(args: argparse.Namespace) -> None:
-    """Interactive shell for sending commands and monitoring."""
+def run_interactive(args):
+    """Interactive mode: manual command shell."""
     host = LudpHost(
         fpga_ip=args.fpga_ip,
-        local_port=args.local_port,
+        local_port=args.port,
         window_size=args.window_size,
-        on_data=lambda pkt: print(
-            f"[DATA] seq={pkt.seq_num} len={pkt.payload_len} ts={pkt.timestamp} "
-            f"payload[:8]={pkt.payload[:8].hex()}"
-        ),
+        credit_interval=args.credit_interval,
     )
 
     host.start()
+
     print("\nLUDP Interactive Shell")
     print("Commands: start, stop, read <addr>, write <addr> <data>, credit <n>, stats, quit")
 
@@ -617,8 +588,8 @@ def run_interactive(args: argparse.Namespace) -> None:
                 continue
 
             if cmd[0] == "start":
-                host.send_start()
-                host.send_credit(args.window_size)
+                if host.send_start():
+                    host.send_credit(host.abs_credit)
             elif cmd[0] == "stop":
                 host.send_stop()
             elif cmd[0] == "read" and len(cmd) == 2:
@@ -628,15 +599,15 @@ def run_interactive(args: argparse.Namespace) -> None:
             elif cmd[0] == "write" and len(cmd) == 3:
                 addr = int(cmd[1], 0)
                 data = int(cmd[2], 0)
-                ok = host.write_reg(addr, data)
-                print(f"  write_reg(0x{addr:04x}, 0x{data:04x}) = {'OK' if ok else 'FAIL'}")
+                if host.write_reg(addr, data):
+                    print(f"  write_reg(0x{addr:04x}, 0x{data:08x}) OK")
             elif cmd[0] == "credit" and len(cmd) == 2:
                 n = int(cmd[1], 0)
                 host.send_credit(n)
                 print(f"  Sent credit={n}")
             elif cmd[0] == "stats":
                 print(f"  {host.get_stats()}")
-            elif cmd[0] in ("quit", "exit", "q"):
+            elif cmd[0] in ("quit", "exit"):
                 break
             else:
                 print("  Unknown command")
@@ -646,88 +617,5 @@ def run_interactive(args: argparse.Namespace) -> None:
         host.stop()
 
 
-# ============================================================================
-# Main Entry Point
-# ============================================================================
-
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="LUDP Host Application - PC-side reference implementation",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Log data for 10 seconds
-  python ludp_host.py --fpga-ip 192.168.1.128 --duration 10 -o data.bin
-
-  # Interactive mode
-  python ludp_host.py --fpga-ip 192.168.1.128 --mode interactive
-
-  # Large window for high throughput
-  python ludp_host.py --fpga-ip 192.168.1.128 --window-size 4096 --duration 60
-        """,
-    )
-    parser.add_argument(
-        "--fpga-ip",
-        default="192.168.1.128",
-        help="FPGA IP address (default: 192.168.1.128)",
-    )
-    parser.add_argument(
-        "--local-port",
-        type=int,
-        default=LUDP_PORT,
-        help=f"Local UDP port (default: {LUDP_PORT})",
-    )
-    parser.add_argument(
-        "--duration",
-        type=int,
-        default=10,
-        help="Acquisition duration in seconds (default: 10)",
-    )
-    parser.add_argument(
-        "--window-size",
-        type=int,
-        default=DEFAULT_WINDOW_SIZE,
-        help=f"Credit window size in packets (default: {DEFAULT_WINDOW_SIZE})",
-    )
-    parser.add_argument(
-        "--credit-interval",
-        type=int,
-        default=DEFAULT_CREDIT_INTERVAL,
-        help=f"Send credit update every N packets (default: {DEFAULT_CREDIT_INTERVAL})",
-    )
-    parser.add_argument(
-        "--nack-timeout",
-        type=float,
-        default=5.0,
-        help="NACK retransmit timeout in ms (default: 5.0)",
-    )
-    parser.add_argument(
-        "--credit-poll",
-        type=float,
-        default=50.0,
-        help="Credit keep-alive poll interval in ms (default: 50.0)",
-    )
-    parser.add_argument(
-        "-o", "--output",
-        default=None,
-        help="Output file for raw payload data",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["logger", "interactive"],
-        default="logger",
-        help="Application mode (default: logger)",
-    )
-
-    args = parser.parse_args()
-
-    if args.mode == "logger":
-        run_data_logger(args)
-    else:
-        run_interactive(args)
-
-    return 0
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

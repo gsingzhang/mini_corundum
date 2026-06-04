@@ -8,6 +8,30 @@ PC-side Python reference implementation for the Lightweight Ultrasonic DAQ Proto
 - 10G Ethernet NIC with jumbo frame support (MTU >= 9000)
 - FPGA running LUDP bitstream connected via SFP+
 
+## Verification
+
+Run the unit tests to verify packet format compatibility with the FPGA:
+
+```bash
+cd sw
+python test_ludp_host.py
+```
+
+Expected output (7 tests passed):
+```
+test_cmd_packet_layout (__main__.TestLudpPacketFormat) ... ok
+test_credit_packet_layout (__main__.TestLudpPacketFormat) ... ok
+test_magic_consistency (__main__.TestLudpPacketFormat) ... ok
+test_nack_packet_layout (__main__.TestLudpPacketFormat) ... ok
+test_parse_data_packet (__main__.TestLudpDataParsing) ... ok
+test_cmd_id_increment (__main__.TestLudpHostState) ... ok
+test_initial_state (__main__.TestLudpHostState) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.001s
+OK
+```
+
 ## Quick Start
 
 ### 1. Configure Network

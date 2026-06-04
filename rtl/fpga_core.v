@@ -216,7 +216,7 @@ wire [31:0] local_ip    = {8'd192, 8'd168, 8'd1,   8'd128};
 wire [31:0] gateway_ip  = {8'd192, 8'd168, 8'd1,   8'd1};
 wire [31:0] subnet_mask = {8'd255, 8'd255, 8'd255, 8'd0};
 
-// IP ports not used
+// IP ports not used (ICMP not implemented in this version)
 assign rx_ip_hdr_ready = 1;
 assign rx_ip_payload_axis_tready = 1;
 
@@ -236,7 +236,7 @@ assign tx_ip_payload_axis_tuser = 0;
 
 // LUDP Protocol Configuration
 wire [47:0] host_mac_reg = 48'h02_00_00_00_00_01;
-wire [31:0] host_ip_reg  = {8'd192, 8'd168, 8'd1, 8'd1};
+wire [31:0] host_ip_reg  = {8'd192, 8'd168, 8'd1, 8'd199};
 wire [15:0] ludp_port_reg = 16'd1234;
 
 // LUDP Protocol Signals
