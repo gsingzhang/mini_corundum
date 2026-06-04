@@ -133,6 +133,9 @@ module icmp_echo_reply #(
     logic rx_payload_tlast_reg;
     logic [KEEP_WIDTH-1:0] rx_payload_tkeep_reg;
 
+    // Flag to track if we have received tlast during RX
+    logic rx_done_reg;
+
     // Payload buffer for echo reply
     // Maximum payload: 1480 bytes (max IP payload) / 8 = 185 beats, but we only need small ping packets
     // For typical ping: 32-64 bytes payload = 4-8 beats
@@ -147,12 +150,13 @@ module icmp_echo_reply #(
     logic [PAYLOAD_BUF_ADDR_WIDTH:0] payload_buf_rd_ptr;
     logic [PAYLOAD_BUF_ADDR_WIDTH:0] payload_buf_count;
 
-    // Detect ICMP echo request on header beat
-    // Use current payload data, not registered values, for detection
-    logic is_echo_request;
-    assign is_echo_request = (s_ip_protocol == ICMP_PROTOCOL) &&
-                             (s_ip_payload_axis_tdata[7:0] == ICMP_ECHO_REQUEST) &&
-                             (s_ip_payload_axis_tdata[15:8] == 8'h00);
+    // Detect ICMP echo request
+    // ip_eth_rx_64 outputs m_ip_hdr_valid and first payload beat in same cycle,
+    // but first payload beat contains last IP header bytes, not ICMP header.
+    // ICMP header (type/code/checksum/id/seq) starts on the NEXT payload beat.
+    // So we detect ICMP type on the first valid payload beat in STATE_RX_PAYLOAD.
+    logic is_icmp_protocol;
+    assign is_icmp_protocol = (s_ip_protocol == ICMP_PROTOCOL);
 
     // ICMP checksum for reply: type changes from 08 to 00
     // Checksum adjustment: ~checksum = ~old_checksum + 0x0800
@@ -166,7 +170,8 @@ module icmp_echo_reply #(
         case (state_reg)
             STATE_IDLE: begin
                 if (s_ip_hdr_valid && s_ip_hdr_ready) begin
-                    if (is_echo_request) begin
+                    if (is_icmp_protocol) begin
+                        // Go to RX_PAYLOAD to inspect first real payload beat
                         state_next = STATE_RX_PAYLOAD;
                     end else begin
                         state_next = STATE_PASS_THROUGH;
@@ -175,8 +180,24 @@ module icmp_echo_reply #(
             end
 
             STATE_RX_PAYLOAD: begin
-                if (s_ip_payload_axis_tvalid && s_ip_payload_axis_tready && s_ip_payload_axis_tlast)
+                // Check first payload beat for ICMP echo request type
+                if (s_ip_payload_axis_tvalid && s_ip_payload_axis_tready) begin
+                    if (payload_buf_wr_ptr == '0) begin
+                        // First payload beat: check ICMP type
+                        if (s_ip_payload_axis_tdata[7:0] != ICMP_ECHO_REQUEST || s_ip_payload_axis_tdata[15:8] != 8'h00) begin
+                            // Not an echo request, abort and go to pass-through
+                            state_next = STATE_PASS_THROUGH;
+                        end else if (s_ip_payload_axis_tlast) begin
+                            state_next = STATE_TX_HEADER;
+                        end
+                    end else if (s_ip_payload_axis_tlast) begin
+                        // Subsequent beat with tlast
+                        state_next = STATE_TX_HEADER;
+                    end
+                end else if (rx_done_reg && payload_buf_wr_ptr != '0) begin
+                    // tlast was already received, go to TX
                     state_next = STATE_TX_HEADER;
+                end
             end
 
             STATE_TX_HEADER: begin
@@ -280,6 +301,7 @@ module icmp_echo_reply #(
             icmp_seq_reg <= 16'd0;
             rx_payload_tlast_reg <= 1'b0;
             rx_payload_tkeep_reg <= 8'h00;
+            rx_done_reg <= 1'b0;
             payload_buf_wr_ptr <= '0;
             payload_buf_rd_ptr <= '0;
             payload_buf_count <= '0;
@@ -296,9 +318,17 @@ module icmp_echo_reply #(
                 rx_ttl_reg <= s_ip_ttl;
                 rx_checksum_reg <= s_ip_header_checksum;
 
-                // Capture ICMP header from first payload beat
-                // ICMP header is in the first 8 bytes of payload
-                // Byte 0 (type) is in bits [7:0], byte 1 (code) in [15:8], etc.
+                // Reset buffer pointers at start of new packet
+                payload_buf_wr_ptr <= '0;
+                payload_buf_rd_ptr <= '0;
+                payload_buf_count <= '0;
+
+                $display("[%0t] ICMP: hdr_valid=1 proto=%02h is_icmp=%b", $time, s_ip_protocol, is_icmp_protocol);
+            end
+
+            // Capture ICMP header from first real payload beat
+            if (state_reg == STATE_RX_PAYLOAD && s_ip_payload_axis_tvalid && s_ip_payload_axis_tready && payload_buf_wr_ptr == '0) begin
+                // First payload beat contains ICMP header
                 icmp_type_reg <= s_ip_payload_axis_tdata[7:0];
                 icmp_code_reg <= s_ip_payload_axis_tdata[15:8];
                 icmp_checksum_reg <= s_ip_payload_axis_tdata[31:16];
@@ -309,15 +339,10 @@ module icmp_echo_reply #(
                 rx_payload_tkeep_reg <= s_ip_payload_axis_tkeep;
                 rx_payload_tlast_reg <= s_ip_payload_axis_tlast;
 
-                // Reset buffer pointers at start of new packet
-                payload_buf_wr_ptr <= '0;
-                payload_buf_rd_ptr <= '0;
-                payload_buf_count <= '0;
-
-                $display("[%0t] ICMP: hdr_valid=1 proto=%02h payload=%016h is_echo=%b type=%02h code=%02h tlast=%b tkeep=%02h", $time, s_ip_protocol, s_ip_payload_axis_tdata, is_echo_request, s_ip_payload_axis_tdata[7:0], s_ip_payload_axis_tdata[15:8], s_ip_payload_axis_tlast, s_ip_payload_axis_tkeep);
+                $display("[%0t] ICMP: first payload beat=%016h type=%02h code=%02h", $time, s_ip_payload_axis_tdata, s_ip_payload_axis_tdata[7:0], s_ip_payload_axis_tdata[15:8]);
             end
 
-            // Buffer payload during RX
+            // Buffer payload during RX (including first beat with ICMP header)
             if (state_reg == STATE_RX_PAYLOAD && s_ip_payload_axis_tvalid && s_ip_payload_axis_tready) begin
                 // Store payload beat in buffer
                 payload_buf[payload_buf_wr_ptr[PAYLOAD_BUF_ADDR_WIDTH-1:0]] <= s_ip_payload_axis_tdata;
@@ -329,6 +354,11 @@ module icmp_echo_reply #(
                 // Capture payload tkeep and tlast for echo reply
                 rx_payload_tkeep_reg <= s_ip_payload_axis_tkeep;
                 rx_payload_tlast_reg <= s_ip_payload_axis_tlast;
+
+                // Set rx_done flag when tlast is received
+                if (s_ip_payload_axis_tlast) begin
+                    rx_done_reg <= 1'b1;
+                end
             end
 
             // Read from buffer during TX

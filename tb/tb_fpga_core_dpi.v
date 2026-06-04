@@ -51,9 +51,34 @@ localparam [7:0]  XGMII_IDLE    = 8'h07;
 localparam [7:0]  XGMII_START   = 8'hfb;
 localparam [7:0]  XGMII_TERM    = 8'hfd;
 localparam [7:0]  XGMII_ERROR   = 8'hfe;
+localparam [63:0] XGMII_IDLE_QW = 64'h0707070707070707;
+localparam [7:0]  XGMII_IDLE_CTRL = 8'hff;
+localparam [7:0]  ETH_PRE       = 8'h55;
+localparam [7:0]  ETH_SFD       = 8'hD5;
 
 // Include DPI-C safe interface
 `include "dpi_safe.sv"
+
+// CRC32 function for Ethernet FCS
+function [31:0] eth_crc32;
+    input integer data_len;
+    integer i, j;
+    reg [31:0] crc;
+    reg [7:0]  byte_data;
+    reg        bit_in;
+    begin
+        crc = 32'hFFFFFFFF;
+        for (i = 0; i < data_len; i = i + 1) begin
+            byte_data = dpi_get_byte(i);
+            for (j = 0; j < 8; j = j + 1) begin
+                bit_in = byte_data[j] ^ crc[0];
+                crc = crc >> 1;
+                if (bit_in) crc = crc ^ 32'hEDB88320;
+            end
+        end
+        eth_crc32 = ~crc;
+    end
+endfunction
 
 // DUT instantiation
 fpga_core dut (
@@ -106,10 +131,18 @@ always @(posedge clk) begin
 end
 
 // DPI-C packet feeding task using safe scalar functions
+// Builds proper XGMII frame with Preamble, SFD, CRC, and Terminate
 task feed_packet_from_dpi;
     integer i;
     integer pkt_len;
-    integer remaining;
+    integer beat;
+    integer lane;
+    integer xgmii_len;
+    integer total_beats;
+    reg [63:0] d;
+    reg [7:0]  c;
+    reg [7:0]  xgmii_data [0:1535];
+    reg [31:0] crc;
     begin
         if (!dpi_packet_available()) begin
             $display("[%0t] DPI: No packet available", $time);
@@ -119,79 +152,54 @@ task feed_packet_from_dpi;
         pkt_len = dpi_get_length();
         $display("[%0t] DPI: Feeding packet of %0d bytes", $time, pkt_len);
 
-        i = 0;
-        while (i < pkt_len) begin
-            @(posedge clk);
+        // Compute Ethernet CRC32 over packet data
+        crc = eth_crc32(pkt_len);
 
-            if (i == 0) begin
-                // First cycle: Start + data
-                sfp0_rxd[7:0]   <= XGMII_START;
-                sfp0_rxc[0]     <= 1'b1;
+        // Build XGMII frame: [START][6xPREAMBLE][SFD][DATA][CRC][TERM]
+        xgmii_data[0] = XGMII_START;
+        for (i = 1; i < 7; i = i + 1)
+            xgmii_data[i] = ETH_PRE;
+        xgmii_data[7] = ETH_SFD;
 
-                if (pkt_len >= 8) begin
-                    sfp0_rxd[15:8]  <= dpi_get_byte(0);
-                    sfp0_rxd[23:16] <= dpi_get_byte(1);
-                    sfp0_rxd[31:24] <= dpi_get_byte(2);
-                    sfp0_rxd[39:32] <= dpi_get_byte(3);
-                    sfp0_rxd[47:40] <= dpi_get_byte(4);
-                    sfp0_rxd[55:48] <= dpi_get_byte(5);
-                    sfp0_rxd[63:56] <= dpi_get_byte(6);
-                    sfp0_rxc[7:1]   <= 7'b0000000;
-                    i = i + 7;
-                end else begin
-                    remaining = pkt_len - 1;
-                    if (remaining >= 1) sfp0_rxd[15:8]  <= dpi_get_byte(0);
-                    if (remaining >= 2) sfp0_rxd[23:16] <= dpi_get_byte(1);
-                    if (remaining >= 3) sfp0_rxd[31:24] <= dpi_get_byte(2);
-                    if (remaining >= 4) sfp0_rxd[39:32] <= dpi_get_byte(3);
-                    if (remaining >= 5) sfp0_rxd[47:40] <= dpi_get_byte(4);
-                    if (remaining >= 6) sfp0_rxd[55:48] <= dpi_get_byte(5);
-                    if (remaining >= 7) begin
-                        sfp0_rxd[63:56] <= XGMII_TERM;
-                        sfp0_rxc[7]     <= 1'b1;
-                    end
-                    sfp0_rxc[7:1]   <= {remaining >= 7, 6'b000000};
-                    i = pkt_len;
+        for (i = 0; i < pkt_len; i = i + 1)
+            xgmii_data[8 + i] = dpi_get_byte(i);
+
+        xgmii_data[8 + pkt_len + 0] = crc[7:0];
+        xgmii_data[8 + pkt_len + 1] = crc[15:8];
+        xgmii_data[8 + pkt_len + 2] = crc[23:16];
+        xgmii_data[8 + pkt_len + 3] = crc[31:24];
+        xgmii_data[8 + pkt_len + 4] = XGMII_TERM;
+
+        xgmii_len = 13 + pkt_len;
+        total_beats = (xgmii_len + 7) / 8;
+
+        for (beat = 0; beat < total_beats; beat = beat + 1) begin
+            d = XGMII_IDLE_QW;
+            c = XGMII_IDLE_CTRL;
+
+            for (lane = 0; lane < 8; lane = lane + 1) begin
+                i = beat * 8 + lane;
+                if (i < xgmii_len) begin
+                    d[lane*8 +: 8] = xgmii_data[i];
+                    if (beat == 0 && lane == 0)
+                        c[lane] = 1'b1;
+                    else if (i == xgmii_len - 1)
+                        c[lane] = 1'b1;
+                    else
+                        c[lane] = 1'b0;
                 end
-            end else if (i + 8 >= pkt_len) begin
-                // Last cycle: data + terminate
-                remaining = pkt_len - i;
-                sfp0_rxd[7:0]   <= dpi_get_byte(i);
-                if (remaining >= 2) sfp0_rxd[15:8]  <= dpi_get_byte(i+1);
-                if (remaining >= 3) sfp0_rxd[23:16] <= dpi_get_byte(i+2);
-                if (remaining >= 4) sfp0_rxd[31:24] <= dpi_get_byte(i+3);
-                if (remaining >= 5) sfp0_rxd[39:32] <= dpi_get_byte(i+4);
-                if (remaining >= 6) sfp0_rxd[47:40] <= dpi_get_byte(i+5);
-                if (remaining >= 7) sfp0_rxd[55:48] <= dpi_get_byte(i+6);
-                if (remaining >= 8) begin
-                    sfp0_rxd[63:56] <= dpi_get_byte(i+7);
-                    sfp0_rxc        <= 8'h00;
-                    i = i + 8;
-                end else begin
-                    sfp0_rxd[63:56] <= XGMII_TERM;
-                    sfp0_rxc        <= {1'b1, 7'b0000000};
-                    i = pkt_len;
-                end
-            end else begin
-                // Middle cycle: all data
-                sfp0_rxd[7:0]   <= dpi_get_byte(i);
-                sfp0_rxd[15:8]  <= dpi_get_byte(i+1);
-                sfp0_rxd[23:16] <= dpi_get_byte(i+2);
-                sfp0_rxd[31:24] <= dpi_get_byte(i+3);
-                sfp0_rxd[39:32] <= dpi_get_byte(i+4);
-                sfp0_rxd[47:40] <= dpi_get_byte(i+5);
-                sfp0_rxd[55:48] <= dpi_get_byte(i+6);
-                sfp0_rxd[63:56] <= dpi_get_byte(i+7);
-                sfp0_rxc        <= 8'h00;
-                i = i + 8;
             end
+
+            @(posedge clk);
+            sfp0_rxd <= d;
+            sfp0_rxc <= c;
         end
 
         // Send idle cycles after packet
         repeat(12) begin
             @(posedge clk);
-            sfp0_rxd <= 64'h0707070707070707;
-            sfp0_rxc <= 8'hff;
+            sfp0_rxd <= XGMII_IDLE_QW;
+            sfp0_rxc <= XGMII_IDLE_CTRL;
         end
 
         // Advance to next packet
