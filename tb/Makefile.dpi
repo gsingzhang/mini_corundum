@@ -1,0 +1,166 @@
+# VCS Makefile for fpga_core DPI-C co-simulation (FIFO-based)
+# This Makefile builds and runs the testbench with Python co-simulation
+
+# Testbench settings
+TB_TOP = tb_fpga_core_dpi
+DUT = fpga_core
+
+# Directories
+RTL_DIR = ../rtl
+LIB_DIR = ../lib
+ETH_RTL_DIR = $(LIB_DIR)/eth/rtl
+AXIS_RTL_DIR = $(LIB_DIR)/eth/lib/axis/rtl
+
+# Source files
+VERILOG_SOURCES += dpi_fifo.sv
+VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol.sv
+VERILOG_SOURCES += $(RTL_DIR)/icmp_echo_reply.sv
+VERILOG_SOURCES += $(RTL_DIR)/$(DUT).v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_mac_10g_fifo.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_mac_10g.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/axis_xgmii_rx_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/axis_xgmii_tx_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_phy_10g.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_phy_10g_rx.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_phy_10g_rx_if.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_phy_10g_rx_frame_sync.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_phy_10g_rx_ber_mon.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_phy_10g_rx_watchdog.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_phy_10g_tx.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_phy_10g_tx_if.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/xgmii_baser_dec_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/xgmii_baser_enc_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/lfsr.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_axis_rx.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_axis_tx.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/udp_complete_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/udp_checksum_gen_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/udp_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/udp_ip_rx_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/udp_ip_tx_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/ip_complete_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/ip_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/ip_eth_rx_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/ip_eth_tx_64.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/ip_arb_mux.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/arp.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/arp_cache.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/arp_eth_rx.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/arp_eth_tx.v
+VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_arb_mux.v
+VERILOG_SOURCES += $(AXIS_RTL_DIR)/arbiter.v
+VERILOG_SOURCES += $(AXIS_RTL_DIR)/priority_encoder.v
+VERILOG_SOURCES += $(AXIS_RTL_DIR)/axis_fifo.v
+VERILOG_SOURCES += $(AXIS_RTL_DIR)/axis_async_fifo.v
+VERILOG_SOURCES += $(AXIS_RTL_DIR)/axis_async_fifo_adapter.v
+VERILOG_SOURCES += $(AXIS_RTL_DIR)/sync_reset.v
+
+# Testbench
+VERILOG_SOURCES += $(TB_TOP).v
+
+# C source for DPI
+DPI_C_SOURCES = dpi_safe.c
+
+# VCS settings
+VCS = vcs
+VCS_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
+    -debug_access+all -kdb \
+    +v2k \
+    +libext+.v+.sv \
+    -CFLAGS "-DVCS" \
+    -f filelist_dpi.f \
+    -top $(TB_TOP) \
+    -o simv_dpi
+
+# DPI compilation flags
+DPI_FLAGS = -LDFLAGS "-Wl,--no-as-needed" \
+    $(DPI_C_SOURCES)
+
+# Simulation executable
+SIMV = ./simv_dpi
+
+# Python client
+PYTHON_CLIENT = ../sw/ludp_host_fifo.py
+
+.PHONY: all compile sim sim-arp sim-icmp sim-ludp clean
+
+all: sim
+
+# Generate filelist
+filelist_dpi.f: Makefile.dpi
+	@echo "Generating filelist..."
+	@rm -f filelist_dpi.f
+	@for f in $(VERILOG_SOURCES); do echo "$$f" >> filelist_dpi.f; done
+
+# Compile with DPI-C
+compile: filelist_dpi.f
+	$(VCS) $(VCS_FLAGS) $(DPI_FLAGS)
+
+# Run simulation with ARP packet
+sim-arp: compile
+	@echo "========================================"
+	@echo "Running DPI-C simulation with ARP"
+	@echo "========================================"
+	@rm -rf /tmp/ludp_dpi_fifo
+	@python3 $(PYTHON_CLIENT) --packet-type arp
+	$(SIMV) -no_save
+
+# Run simulation with ICMP packet
+sim-icmp: compile
+	@echo "========================================"
+	@echo "Running DPI-C simulation with ICMP"
+	@echo "========================================"
+	@rm -rf /tmp/ludp_dpi_fifo
+	@python3 $(PYTHON_CLIENT) --packet-type icmp
+	$(SIMV) -no_save
+
+# Run simulation with LUDP START
+sim-ludp-start: compile
+	@echo "========================================"
+	@echo "Running DPI-C simulation with LUDP START"
+	@echo "========================================"
+	@rm -rf /tmp/ludp_dpi_fifo
+	@python3 $(PYTHON_CLIENT) --packet-type ludp_start
+	$(SIMV) -no_save
+
+# Run simulation with LUDP CREDIT
+sim-ludp-credit: compile
+	@echo "========================================"
+	@echo "Running DPI-C simulation with LUDP CREDIT"
+	@echo "========================================"
+	@rm -rf /tmp/ludp_dpi_fifo
+	@python3 $(PYTHON_CLIENT) --packet-type ludp_start
+	@python3 $(PYTHON_CLIENT) --packet-type ludp_credit
+	$(SIMV) -no_save
+
+# Run simulation with full LUDP sequence
+sim-ludp-full: compile
+	@echo "========================================"
+	@echo "Running DPI-C simulation with full LUDP"
+	@echo "========================================"
+	@rm -rf /tmp/ludp_dpi_fifo
+	@python3 $(PYTHON_CLIENT) --packet-type ludp_full
+	$(SIMV) -no_save
+
+# Run simulation (default - just wait for packet file)
+sim: compile
+	@echo "========================================"
+	@echo "Starting DPI-C simulation"
+	@echo "========================================"
+	@echo "Generate packets with: python3 $(PYTHON_CLIENT) --packet-type <type>"
+	@echo ""
+	@rm -rf /tmp/ludp_dpi_fifo
+	$(SIMV) -no_save
+
+# Clean
+clean:
+	rm -rf simv_dpi simv_dpi.daidir csrc
+	rm -rf vc_hdrs.h .vlogansetup.args .vlogansetup.env
+	rm -f filelist_dpi.f
+	rm -f *.vpd *.vcd *.fsdb
+	rm -rf verdiLog novas* *.rc
+	rm -f ucli.key
+	rm -rf AN.DB
+	rm -f sim-*.log
+	rm -rf DVEfiles
+	rm -rf /tmp/ludp_dpi_fifo

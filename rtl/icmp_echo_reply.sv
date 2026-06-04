@@ -129,11 +129,30 @@ module icmp_echo_reply #(
     logic [15:0] icmp_id_reg;
     logic [15:0] icmp_seq_reg;
 
+    // Registered payload tlast and tkeep for echo reply generation
+    logic rx_payload_tlast_reg;
+    logic [KEEP_WIDTH-1:0] rx_payload_tkeep_reg;
+
+    // Payload buffer for echo reply
+    // Maximum payload: 1480 bytes (max IP payload) / 8 = 185 beats, but we only need small ping packets
+    // For typical ping: 32-64 bytes payload = 4-8 beats
+    // Buffer size: 16 beats x 64 bits = 128 bytes (enough for most ping packets)
+    localparam PAYLOAD_BUF_DEPTH = 16;
+    localparam PAYLOAD_BUF_ADDR_WIDTH = $clog2(PAYLOAD_BUF_DEPTH);
+
+    logic [DATA_WIDTH-1:0] payload_buf [0:PAYLOAD_BUF_DEPTH-1];
+    logic [KEEP_WIDTH-1:0] payload_buf_keep [0:PAYLOAD_BUF_DEPTH-1];
+    logic payload_buf_last [0:PAYLOAD_BUF_DEPTH-1];
+    logic [PAYLOAD_BUF_ADDR_WIDTH:0] payload_buf_wr_ptr;
+    logic [PAYLOAD_BUF_ADDR_WIDTH:0] payload_buf_rd_ptr;
+    logic [PAYLOAD_BUF_ADDR_WIDTH:0] payload_buf_count;
+
     // Detect ICMP echo request on header beat
+    // Use current payload data, not registered values, for detection
     logic is_echo_request;
     assign is_echo_request = (s_ip_protocol == ICMP_PROTOCOL) &&
-                             (icmp_type_reg == ICMP_ECHO_REQUEST) &&
-                             (icmp_code_reg == 8'h00);
+                             (s_ip_payload_axis_tdata[7:0] == ICMP_ECHO_REQUEST) &&
+                             (s_ip_payload_axis_tdata[15:8] == 8'h00);
 
     // ICMP checksum for reply: type changes from 08 to 00
     // Checksum adjustment: ~checksum = ~old_checksum + 0x0800
@@ -147,10 +166,11 @@ module icmp_echo_reply #(
         case (state_reg)
             STATE_IDLE: begin
                 if (s_ip_hdr_valid && s_ip_hdr_ready) begin
-                    if (is_echo_request)
+                    if (is_echo_request) begin
                         state_next = STATE_RX_PAYLOAD;
-                    else
+                    end else begin
                         state_next = STATE_PASS_THROUGH;
+                    end
                 end
             end
 
@@ -221,13 +241,25 @@ module icmp_echo_reply #(
 
     // TX payload: ICMP echo reply header + echoed data
     // First beat contains ICMP header (8 bytes)
+    // Byte order: type(1), code(1), checksum(2), id(2), seq(2)
+    // Bits [7:0]=type, [15:8]=code, [31:16]=checksum, [47:32]=id, [63:48]=seq
     logic [63:0] icmp_reply_header;
-    assign icmp_reply_header = {icmp_seq_reg, icmp_id_reg, reply_icmp_checksum, ICMP_ECHO_REPLY, 8'h00};
+    assign icmp_reply_header = {icmp_seq_reg, icmp_id_reg, reply_icmp_checksum, 8'h00, ICMP_ECHO_REPLY};
 
-    assign m_ip_payload_axis_tdata = (state_reg == STATE_TX_HEADER) ? icmp_reply_header : s_ip_payload_axis_tdata;
-    assign m_ip_payload_axis_tkeep = (state_reg == STATE_TX_HEADER) ? 8'hFF : s_ip_payload_axis_tkeep;
-    assign m_ip_payload_axis_tvalid = (state_reg == STATE_TX_HEADER) || (state_reg == STATE_TX_PAYLOAD);
-    assign m_ip_payload_axis_tlast = (state_reg == STATE_TX_PAYLOAD) ? s_ip_payload_axis_tlast : 1'b0;
+    // Buffer read data
+    logic [DATA_WIDTH-1:0] payload_buf_rd_data;
+    logic [KEEP_WIDTH-1:0] payload_buf_rd_keep;
+    logic payload_buf_rd_last;
+
+    assign payload_buf_rd_data = payload_buf[payload_buf_rd_ptr[PAYLOAD_BUF_ADDR_WIDTH-1:0]];
+    assign payload_buf_rd_keep = payload_buf_keep[payload_buf_rd_ptr[PAYLOAD_BUF_ADDR_WIDTH-1:0]];
+    assign payload_buf_rd_last = payload_buf_last[payload_buf_rd_ptr[PAYLOAD_BUF_ADDR_WIDTH-1:0]];
+
+    // TX payload output from buffer
+    assign m_ip_payload_axis_tdata = (state_reg == STATE_TX_HEADER) ? icmp_reply_header : payload_buf_rd_data;
+    assign m_ip_payload_axis_tkeep = (state_reg == STATE_TX_HEADER) ? 8'hFF : payload_buf_rd_keep;
+    assign m_ip_payload_axis_tvalid = (state_reg == STATE_TX_HEADER) || (state_reg == STATE_TX_PAYLOAD && payload_buf_rd_ptr != payload_buf_wr_ptr);
+    assign m_ip_payload_axis_tlast = (state_reg == STATE_TX_PAYLOAD) ? payload_buf_rd_last : 1'b0;
     assign m_ip_payload_axis_tuser = 1'b0;
 
     // Sequential logic
@@ -246,6 +278,11 @@ module icmp_echo_reply #(
             icmp_checksum_reg <= 16'd0;
             icmp_id_reg <= 16'd0;
             icmp_seq_reg <= 16'd0;
+            rx_payload_tlast_reg <= 1'b0;
+            rx_payload_tkeep_reg <= 8'h00;
+            payload_buf_wr_ptr <= '0;
+            payload_buf_rd_ptr <= '0;
+            payload_buf_count <= '0;
         end else begin
             state_reg <= state_next;
 
@@ -261,14 +298,59 @@ module icmp_echo_reply #(
 
                 // Capture ICMP header from first payload beat
                 // ICMP header is in the first 8 bytes of payload
-                // Assuming payload starts at byte 0 of tdata
+                // Byte 0 (type) is in bits [7:0], byte 1 (code) in [15:8], etc.
                 icmp_type_reg <= s_ip_payload_axis_tdata[7:0];
                 icmp_code_reg <= s_ip_payload_axis_tdata[15:8];
-                icmp_checksum_reg <= s_ip_payload_axis_tdata[23:16];
-                icmp_id_reg <= s_ip_payload_axis_tdata[39:24];
-                icmp_seq_reg <= s_ip_payload_axis_tdata[55:40];
+                icmp_checksum_reg <= s_ip_payload_axis_tdata[31:16];
+                icmp_id_reg <= s_ip_payload_axis_tdata[47:32];
+                icmp_seq_reg <= s_ip_payload_axis_tdata[63:48];
+
+                // Capture payload tkeep and tlast for echo reply
+                rx_payload_tkeep_reg <= s_ip_payload_axis_tkeep;
+                rx_payload_tlast_reg <= s_ip_payload_axis_tlast;
+
+                // Reset buffer pointers at start of new packet
+                payload_buf_wr_ptr <= '0;
+                payload_buf_rd_ptr <= '0;
+                payload_buf_count <= '0;
+
+                $display("[%0t] ICMP: hdr_valid=1 proto=%02h payload=%016h is_echo=%b type=%02h code=%02h tlast=%b tkeep=%02h", $time, s_ip_protocol, s_ip_payload_axis_tdata, is_echo_request, s_ip_payload_axis_tdata[7:0], s_ip_payload_axis_tdata[15:8], s_ip_payload_axis_tlast, s_ip_payload_axis_tkeep);
+            end
+
+            // Buffer payload during RX
+            if (state_reg == STATE_RX_PAYLOAD && s_ip_payload_axis_tvalid && s_ip_payload_axis_tready) begin
+                // Store payload beat in buffer
+                payload_buf[payload_buf_wr_ptr[PAYLOAD_BUF_ADDR_WIDTH-1:0]] <= s_ip_payload_axis_tdata;
+                payload_buf_keep[payload_buf_wr_ptr[PAYLOAD_BUF_ADDR_WIDTH-1:0]] <= s_ip_payload_axis_tkeep;
+                payload_buf_last[payload_buf_wr_ptr[PAYLOAD_BUF_ADDR_WIDTH-1:0]] <= s_ip_payload_axis_tlast;
+                payload_buf_wr_ptr <= payload_buf_wr_ptr + 1;
+                payload_buf_count <= payload_buf_count + 1;
+
+                // Capture payload tkeep and tlast for echo reply
+                rx_payload_tkeep_reg <= s_ip_payload_axis_tkeep;
+                rx_payload_tlast_reg <= s_ip_payload_axis_tlast;
+            end
+
+            // Read from buffer during TX
+            if (state_reg == STATE_TX_PAYLOAD && m_ip_payload_axis_tvalid && m_ip_payload_axis_tready) begin
+                payload_buf_rd_ptr <= payload_buf_rd_ptr + 1;
+            end
+
+            if (state_reg == STATE_RX_PAYLOAD && s_ip_payload_axis_tvalid && s_ip_payload_axis_tready && s_ip_payload_axis_tlast) begin
+                $display("[%0t] ICMP: RX payload done, going to TX, buf_count=%0d", $time, payload_buf_count + 1);
+            end
+
+            if (state_reg == STATE_TX_HEADER && m_ip_hdr_valid && m_ip_hdr_ready) begin
+                $display("[%0t] ICMP: TX header accepted, dest_ip=%08h", $time, m_ip_dest_ip);
+            end
+
+            if (state_reg == STATE_TX_PAYLOAD && m_ip_payload_axis_tvalid && m_ip_payload_axis_tready) begin
+                $display("[%0t] ICMP: TX payload beat, tlast=%b rd_ptr=%0d wr_ptr=%0d", $time, m_ip_payload_axis_tlast, payload_buf_rd_ptr, payload_buf_wr_ptr);
+            end
+
+            if (state_reg == STATE_TX_PAYLOAD && m_ip_payload_axis_tvalid && m_ip_payload_axis_tready && m_ip_payload_axis_tlast) begin
+                $display("[%0t] ICMP: TX payload done, going to IDLE", $time);
             end
         end
     end
-
 endmodule

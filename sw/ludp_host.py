@@ -194,13 +194,13 @@ class LudpHost:
         if cmd_id is None:
             cmd_id = self.next_cmd_id
             self.next_cmd_id += 1
-        # LUDP header fields are transmitted in big-endian byte order on the wire.
+        # LUDP header fields are transmitted in little-endian byte order on the wire.
         # The FPGA receives bytes via XGMII and assembles them into 64-bit words
         # where the first byte goes into bits [7:0]. For a 16-bit magic number,
-        # byte0 (MSB) at tdata[15:8] and byte1 (LSB) at tdata[7:0] gives the
+        # byte0 (LSB) at tdata[7:0] and byte1 (MSB) at tdata[15:8] gives the
         # correct value 0xDA01 when read as tdata[15:0].
         return struct.pack(
-            ">HBBIHIH",
+            "<HBBIHIH",
             LUDP_MAGIC,
             PKT_CMD,
             flags,
@@ -213,7 +213,7 @@ class LudpHost:
     def _build_credit(self, abs_credit: int) -> bytes:
         """Build a CREDIT packet (16 bytes)."""
         return struct.pack(
-            ">HBBIHIH",
+            "<HBBIHIH",
             LUDP_MAGIC,
             PKT_CREDIT,
             0x00,
@@ -226,7 +226,7 @@ class LudpHost:
     def _build_nack(self, miss_seq: int, count: int = 1) -> bytes:
         """Build a NACK packet (16 bytes)."""
         return struct.pack(
-            ">HBBIHIH",
+            "<HBBIHIH",
             LUDP_MAGIC,
             PKT_NACK,
             0x00,
@@ -272,8 +272,8 @@ class LudpHost:
                 resp = self.pending_cmds[cmd_id]["response"]
                 del self.pending_cmds[cmd_id]
             if resp and len(resp) >= 16:
-                # Parse CMD_CPL: Read_Data at offset 10 (32-bit, big-endian)
-                read_data = struct.unpack(">I", resp[10:14])[0]
+                # Parse CMD_CPL: Read_Data at offset 10 (32-bit, little-endian)
+                read_data = struct.unpack("<I", resp[10:14])[0]
                 return read_data
         else:
             with self.lock:
@@ -352,8 +352,8 @@ class LudpHost:
             if len(data) < LUDP_HDR_LEN:
                 continue
 
-            # Parse header (LUDP uses big-endian byte order on the wire)
-            magic = struct.unpack(">H", data[0:2])[0]
+            # Parse header (LUDP uses little-endian byte order on the wire)
+            magic = struct.unpack("<H", data[0:2])[0]
             if magic != LUDP_MAGIC:
                 continue
 
@@ -373,12 +373,12 @@ class LudpHost:
             return
 
         pkt = LudpDataPacket(
-            magic=struct.unpack(">H", data[0:2])[0],
+            magic=struct.unpack("<H", data[0:2])[0],
             pkt_type=data[2],
             flags=data[3],
-            seq_num=struct.unpack(">I", data[4:8])[0],
-            payload_len=struct.unpack(">H", data[8:10])[0],
-            timestamp=struct.unpack(">I", data[10:14])[0],
+            seq_num=struct.unpack("<I", data[4:8])[0],
+            payload_len=struct.unpack("<H", data[8:10])[0],
+            timestamp=struct.unpack("<I", data[10:14])[0],
             payload=data[LUDP_HDR_LEN:],
         )
 
@@ -443,7 +443,7 @@ class LudpHost:
         """Handle CMD_ACK from FPGA."""
         if len(data) < 12:
             return
-        cmd_id = struct.unpack(">I", data[4:8])[0]
+        cmd_id = struct.unpack("<I", data[4:8])[0]
         with self.lock:
             if cmd_id in self.pending_cmds:
                 self.pending_cmds[cmd_id]["response"] = data
@@ -453,7 +453,7 @@ class LudpHost:
         """Handle CMD_CPL from FPGA."""
         if len(data) < 16:
             return
-        cmd_id = struct.unpack(">I", data[4:8])[0]
+        cmd_id = struct.unpack("<I", data[4:8])[0]
         with self.lock:
             if cmd_id in self.pending_cmds:
                 self.pending_cmds[cmd_id]["response"] = data

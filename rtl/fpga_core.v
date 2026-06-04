@@ -94,6 +94,10 @@ wire tx_axis_tvalid;
 wire tx_axis_tready;
 wire tx_axis_tlast;
 wire tx_axis_tuser;
+wire tx_error_underflow;
+wire tx_fifo_overflow;
+wire tx_fifo_bad_frame;
+wire tx_fifo_good_frame;
 
 // Ethernet frame between Ethernet modules and UDP stack
 wire rx_eth_hdr_ready;
@@ -216,23 +220,89 @@ wire [31:0] local_ip    = {8'd192, 8'd168, 8'd1,   8'd128};
 wire [31:0] gateway_ip  = {8'd192, 8'd168, 8'd1,   8'd1};
 wire [31:0] subnet_mask = {8'd255, 8'd255, 8'd255, 8'd0};
 
-// IP ports not used (ICMP not implemented in this version)
-assign rx_ip_hdr_ready = 1;
-assign rx_ip_payload_axis_tready = 1;
+// ICMP Echo Reply Module
+// Intercepts ICMP echo requests and generates echo replies
+icmp_echo_reply #(
+    .DATA_WIDTH(64),
+    .KEEP_WIDTH(8)
+)
+icmp_echo_reply_inst (
+    .clk(clk),
+    .rst(rst),
 
-assign tx_ip_hdr_valid = 0;
-assign tx_ip_dscp = 0;
-assign tx_ip_ecn = 0;
-assign tx_ip_length = 0;
-assign tx_ip_ttl = 0;
-assign tx_ip_protocol = 0;
-assign tx_ip_source_ip = 0;
-assign tx_ip_dest_ip = 0;
-assign tx_ip_payload_axis_tdata = 0;
-assign tx_ip_payload_axis_tkeep = 0;
-assign tx_ip_payload_axis_tvalid = 0;
-assign tx_ip_payload_axis_tlast = 0;
-assign tx_ip_payload_axis_tuser = 0;
+    // Configuration
+    .local_mac(local_mac),
+    .local_ip(local_ip),
+
+    // IP frame input (from udp_complete_64)
+    .s_ip_hdr_valid(rx_ip_hdr_valid),
+    .s_ip_hdr_ready(rx_ip_hdr_ready),
+    .s_ip_eth_dest_mac(rx_ip_eth_dest_mac),
+    .s_ip_eth_src_mac(rx_ip_eth_src_mac),
+    .s_ip_eth_type(rx_ip_eth_type),
+    .s_ip_version(rx_ip_version),
+    .s_ip_ihl(rx_ip_ihl),
+    .s_ip_dscp(rx_ip_dscp),
+    .s_ip_ecn(rx_ip_ecn),
+    .s_ip_length(rx_ip_length),
+    .s_ip_identification(rx_ip_identification),
+    .s_ip_flags(rx_ip_flags),
+    .s_ip_fragment_offset(rx_ip_fragment_offset),
+    .s_ip_ttl(rx_ip_ttl),
+    .s_ip_protocol(rx_ip_protocol),
+    .s_ip_header_checksum(rx_ip_header_checksum),
+    .s_ip_source_ip(rx_ip_source_ip),
+    .s_ip_dest_ip(rx_ip_dest_ip),
+    .s_ip_payload_axis_tdata(rx_ip_payload_axis_tdata),
+    .s_ip_payload_axis_tkeep(rx_ip_payload_axis_tkeep),
+    .s_ip_payload_axis_tvalid(rx_ip_payload_axis_tvalid),
+    .s_ip_payload_axis_tready(rx_ip_payload_axis_tready),
+    .s_ip_payload_axis_tlast(rx_ip_payload_axis_tlast),
+    .s_ip_payload_axis_tuser(rx_ip_payload_axis_tuser),
+
+    // IP frame output (to udp_complete_64 for TX reply)
+    .m_ip_hdr_valid(tx_ip_hdr_valid),
+    .m_ip_hdr_ready(tx_ip_hdr_ready),
+    .m_ip_dscp(tx_ip_dscp),
+    .m_ip_ecn(tx_ip_ecn),
+    .m_ip_length(tx_ip_length),
+    .m_ip_ttl(tx_ip_ttl),
+    .m_ip_protocol(tx_ip_protocol),
+    .m_ip_source_ip(tx_ip_source_ip),
+    .m_ip_dest_ip(tx_ip_dest_ip),
+    .m_ip_payload_axis_tdata(tx_ip_payload_axis_tdata),
+    .m_ip_payload_axis_tkeep(tx_ip_payload_axis_tkeep),
+    .m_ip_payload_axis_tvalid(tx_ip_payload_axis_tvalid),
+    .m_ip_payload_axis_tready(tx_ip_payload_axis_tready),
+    .m_ip_payload_axis_tlast(tx_ip_payload_axis_tlast),
+    .m_ip_payload_axis_tuser(tx_ip_payload_axis_tuser),
+
+    // Pass-through IP frame output (for non-ICMP packets - not used)
+    .m_ip_pass_hdr_valid(),
+    .m_ip_pass_hdr_ready(1'b1),
+    .m_ip_pass_eth_dest_mac(),
+    .m_ip_pass_eth_src_mac(),
+    .m_ip_pass_eth_type(),
+    .m_ip_pass_version(),
+    .m_ip_pass_ihl(),
+    .m_ip_pass_dscp(),
+    .m_ip_pass_ecn(),
+    .m_ip_pass_length(),
+    .m_ip_pass_identification(),
+    .m_ip_pass_flags(),
+    .m_ip_pass_fragment_offset(),
+    .m_ip_pass_ttl(),
+    .m_ip_pass_protocol(),
+    .m_ip_pass_header_checksum(),
+    .m_ip_pass_source_ip(),
+    .m_ip_pass_dest_ip(),
+    .m_ip_pass_payload_axis_tdata(),
+    .m_ip_pass_payload_axis_tkeep(),
+    .m_ip_pass_payload_axis_tvalid(),
+    .m_ip_pass_payload_axis_tready(1'b1),
+    .m_ip_pass_payload_axis_tlast(),
+    .m_ip_pass_payload_axis_tuser()
+);
 
 // LUDP Protocol Configuration
 wire [47:0] host_mac_reg = 48'h02_00_00_00_00_01;
@@ -506,9 +576,10 @@ eth_mac_10g_fifo_inst (
     .xgmii_txd(sfp0_txd),
     .xgmii_txc(sfp0_txc),
 
-    .tx_fifo_overflow(),
-    .tx_fifo_bad_frame(),
-    .tx_fifo_good_frame(),
+    .tx_error_underflow(tx_error_underflow),
+    .tx_fifo_overflow(tx_fifo_overflow),
+    .tx_fifo_bad_frame(tx_fifo_bad_frame),
+    .tx_fifo_good_frame(tx_fifo_good_frame),
     .rx_error_bad_frame(),
     .rx_error_bad_fcs(),
     .rx_fifo_overflow(),
@@ -723,6 +794,37 @@ udp_complete_inst (
     .subnet_mask(subnet_mask),
     .clear_arp_cache(1'b0)
 );
+
+// Debug prints for ICMP packet tracing
+always @(posedge clk) begin
+    if (tx_ip_hdr_valid && tx_ip_hdr_ready) begin
+        $display("[%0t] FPGA: ICMP TX hdr accepted by udp_complete_64, proto=%02h dest=%08h", $time, tx_ip_protocol, tx_ip_dest_ip);
+    end
+    if (tx_ip_hdr_valid && !tx_ip_hdr_ready) begin
+        $display("[%0t] FPGA: ICMP TX hdr NOT ready!", $time);
+    end
+    if (tx_eth_hdr_valid && tx_eth_hdr_ready) begin
+        $display("[%0t] FPGA: Ethernet TX hdr out from udp_complete_64, dest=%012h type=%04h", $time, tx_eth_dest_mac, tx_eth_type);
+    end
+    if (tx_eth_payload_axis_tvalid && tx_eth_payload_axis_tready) begin
+        $display("[%0t] FPGA: eth_axis TX payload data=%016h keep=%02h last=%b", $time, tx_eth_payload_axis_tdata, tx_eth_payload_axis_tkeep, tx_eth_payload_axis_tlast);
+    end
+    if (tx_axis_tvalid && tx_axis_tready) begin
+        $display("[%0t] FPGA: AXIS TX data=%016h keep=%02h last=%b", $time, tx_axis_tdata, tx_axis_tkeep, tx_axis_tlast);
+    end
+    if (tx_error_underflow) begin
+        $display("[%0t] FPGA: TX error underflow!", $time);
+    end
+    if (tx_fifo_overflow) begin
+        $display("[%0t] FPGA: TX FIFO overflow!", $time);
+    end
+    if (tx_fifo_bad_frame) begin
+        $display("[%0t] FPGA: TX FIFO bad frame!", $time);
+    end
+    if (tx_fifo_good_frame) begin
+        $display("[%0t] FPGA: TX FIFO good frame!", $time);
+    end
+end
 
 endmodule
 

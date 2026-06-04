@@ -129,6 +129,20 @@ wire tx_sof_detected = (sfp0_txc[0] && sfp0_txd[7:0] == XGMII_START) ||
                        (sfp0_txc[6] && sfp0_txd[55:48] == XGMII_START) ||
                        (sfp0_txc[7] && sfp0_txd[63:56] == XGMII_START);
 
+// Debug XGMII TX
+always @(posedge clk) begin
+    if (tx_sof_detected) begin
+        $display("[%0t] TB: XGMII TX SOF detected, txd=%016h txc=%02h", $time, sfp0_txd, sfp0_txc);
+    end
+end
+
+// Debug frame capture
+always @(posedge clk) begin
+    if (tx_frame_active && sfp0_txc == 8'hff) begin
+        $display("[%0t] TB: Frame ended, tx_frame_count=%0d", $time, tx_frame_count);
+    end
+end
+
 always @(posedge clk) begin
     if (sfp0_tx_rst) begin
         tx_frame_count <= 0;
@@ -461,6 +475,169 @@ task send_ludp_packet;
             frame_data[60 + i] = 8'h00;
 
         send_xgmii_frame(34 + udp_len);
+    end
+endtask
+
+task send_icmp_echo_request;
+    input [15:0] icmp_id;
+    input [15:0] icmp_seq;
+    input integer payload_len;
+    integer i;
+    integer total_len;
+    reg [159:0] ip_hdr;
+    reg [15:0] cksum;
+    reg [15:0] icmp_cksum;
+    begin
+        total_len = 20 + 8 + payload_len;
+
+        // Ethernet header
+        frame_data[0]  = DUT_MAC[47:40];  frame_data[1]  = DUT_MAC[39:32];
+        frame_data[2]  = DUT_MAC[31:24];  frame_data[3]  = DUT_MAC[23:16];
+        frame_data[4]  = DUT_MAC[15:8];   frame_data[5]  = DUT_MAC[7:0];
+        frame_data[6]  = HOST_MAC[47:40]; frame_data[7]  = HOST_MAC[39:32];
+        frame_data[8]  = HOST_MAC[31:24]; frame_data[9]  = HOST_MAC[23:16];
+        frame_data[10] = HOST_MAC[15:8];  frame_data[11] = HOST_MAC[7:0];
+        frame_data[12] = 8'h08; frame_data[13] = 8'h00;
+
+        // IP header
+        frame_data[14] = 8'h45; frame_data[15] = 8'h00;
+        frame_data[16] = total_len[15:8]; frame_data[17] = total_len[7:0];
+        frame_data[18] = 8'h00; frame_data[19] = 8'h01;
+        frame_data[20] = 8'h00; frame_data[21] = 8'h00;
+        frame_data[22] = 8'h40; frame_data[23] = 8'h01;  // TTL=64, Protocol=ICMP
+        frame_data[24] = 8'h00; frame_data[25] = 8'h00;
+        frame_data[26] = HOST_IP[31:24]; frame_data[27] = HOST_IP[23:16];
+        frame_data[28] = HOST_IP[15:8];  frame_data[29] = HOST_IP[7:0];
+        frame_data[30] = DUT_IP[31:24];  frame_data[31] = DUT_IP[23:16];
+        frame_data[32] = DUT_IP[15:8];   frame_data[33] = DUT_IP[7:0];
+
+        ip_hdr = {DUT_IP, HOST_IP, 16'h0000, 16'h4001, 16'h0000, 16'h0001, total_len[15:0], 16'h4500};
+        cksum = ip_checksum(ip_hdr);
+        frame_data[24] = cksum[15:8];
+        frame_data[25] = cksum[7:0];
+
+        // ICMP header: Type=8 (echo request), Code=0, Checksum, ID, Seq
+        frame_data[34] = 8'h08;  // Type: Echo Request
+        frame_data[35] = 8'h00;  // Code: 0
+        frame_data[36] = 8'h00; frame_data[37] = 8'h00;  // Checksum (placeholder)
+        frame_data[38] = icmp_id[15:8];  frame_data[39] = icmp_id[7:0];
+        frame_data[40] = icmp_seq[15:8]; frame_data[41] = icmp_seq[7:0];
+
+        // ICMP payload
+        for (i = 0; i < payload_len; i = i + 1)
+            frame_data[42 + i] = 8'hA5 + i[7:0];
+
+        // Calculate ICMP checksum
+        icmp_cksum = icmp_checksum(42 + payload_len);
+        frame_data[36] = icmp_cksum[15:8];
+        frame_data[37] = icmp_cksum[7:0];
+
+        $display("[%0t] Sending ICMP Echo Request: id=%04h seq=%04h payload=%0d bytes ip_cksum=%04h icmp_cksum=%04h", $time, icmp_id, icmp_seq, payload_len, cksum, icmp_cksum);
+        $display("[%0t] ICMP frame data: eth_type=%02h%02h ip_proto=%02h ip_cksum=%02h%02h icmp_type=%02h icmp_code=%02h", $time, frame_data[12], frame_data[13], frame_data[23], frame_data[24], frame_data[25], frame_data[34], frame_data[35]);
+        send_xgmii_frame(34 + 8 + payload_len);
+    end
+endtask
+
+function [15:0] icmp_checksum;
+    input integer len;
+    integer i;
+    reg [31:0] sum;
+    reg [15:0] word;
+    begin
+        sum = 0;
+        for (i = 34; i < len; i = i + 2) begin
+            if (i + 1 < len)
+                word = {frame_data[i], frame_data[i+1]};
+            else
+                word = {frame_data[i], 8'h00};
+            sum = sum + word;
+        end
+        while (sum[31:16] != 0)
+            sum = sum[31:16] + sum[15:0];
+        icmp_checksum = ~sum[15:0];
+    end
+endfunction
+
+task verify_icmp_echo_reply;
+    input [15:0] exp_id;
+    input [15:0] exp_seq;
+    reg [47:0] eth_dst;
+    reg [47:0] eth_src;
+    reg [15:0] eth_type;
+    reg [31:0] ip_src;
+    reg [31:0] ip_dst;
+    reg [7:0]  icmp_type;
+    reg [7:0]  icmp_code;
+    reg [15:0] icmp_id_rx;
+    reg [15:0] icmp_seq_rx;
+    begin
+        wait_for_tx_frame(5000);
+
+        if (tx_capture_len < 3) begin
+            $display("[%0t] ERROR: No ICMP reply captured", $time);
+            error_count = error_count + 1;
+            return;
+        end
+
+        eth_dst = {get_tx_byte(0), get_tx_byte(1), get_tx_byte(2),
+                   get_tx_byte(3), get_tx_byte(4), get_tx_byte(5)};
+        eth_src = {get_tx_byte(6), get_tx_byte(7), get_tx_byte(8),
+                   get_tx_byte(9), get_tx_byte(10), get_tx_byte(11)};
+        eth_type = {get_tx_byte(12), get_tx_byte(13)};
+        ip_src = {get_tx_byte(26), get_tx_byte(27), get_tx_byte(28), get_tx_byte(29)};
+        ip_dst = {get_tx_byte(30), get_tx_byte(31), get_tx_byte(32), get_tx_byte(33)};
+        icmp_type = get_tx_byte(34);
+        icmp_code = get_tx_byte(35);
+        icmp_id_rx = {get_tx_byte(38), get_tx_byte(39)};
+        icmp_seq_rx = {get_tx_byte(40), get_tx_byte(41)};
+
+        $display("[%0t] ICMP Reply: dst=%012h src=%012h type=%04h ip_src=%08h ip_dst=%08h icmp_type=%02h icmp_code=%02h id=%04h seq=%04h",
+                 $time, eth_dst, eth_src, eth_type, ip_src, ip_dst, icmp_type, icmp_code, icmp_id_rx, icmp_seq_rx);
+
+        if (eth_dst !== HOST_MAC) begin
+            $display("[%0t] ERROR: ICMP reply dst MAC mismatch: expected %012h, got %012h", $time, HOST_MAC, eth_dst);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP reply dst MAC correct", $time);
+
+        if (eth_src !== DUT_MAC) begin
+            $display("[%0t] ERROR: ICMP reply src MAC mismatch: expected %012h, got %012h", $time, DUT_MAC, eth_src);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP reply src MAC correct", $time);
+
+        if (eth_type !== 16'h0800) begin
+            $display("[%0t] ERROR: ICMP reply EtherType mismatch: expected 0800, got %04h", $time, eth_type);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP reply EtherType correct", $time);
+
+        if (ip_src !== DUT_IP) begin
+            $display("[%0t] ERROR: ICMP reply IP src mismatch: expected %08h, got %08h", $time, DUT_IP, ip_src);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP reply IP src correct", $time);
+
+        if (ip_dst !== HOST_IP) begin
+            $display("[%0t] ERROR: ICMP reply IP dst mismatch: expected %08h, got %08h", $time, HOST_IP, ip_dst);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP reply IP dst correct", $time);
+
+        if (icmp_type !== 8'h00) begin
+            $display("[%0t] ERROR: ICMP type mismatch: expected 00 (echo reply), got %02h", $time, icmp_type);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP type correct (echo reply)", $time);
+
+        if (icmp_code !== 8'h00) begin
+            $display("[%0t] ERROR: ICMP code mismatch: expected 00, got %02h", $time, icmp_code);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP code correct", $time);
+
+        if (icmp_id_rx !== exp_id) begin
+            $display("[%0t] ERROR: ICMP ID mismatch: expected %04h, got %04h", $time, exp_id, icmp_id_rx);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP ID correct", $time);
+
+        if (icmp_seq_rx !== exp_seq) begin
+            $display("[%0t] ERROR: ICMP seq mismatch: expected %04h, got %04h", $time, exp_seq, icmp_seq_rx);
+            error_count = error_count + 1;
+        end else $display("[%0t] PASS: ICMP seq correct", $time);
     end
 endtask
 
@@ -815,12 +992,42 @@ initial begin
     resolve_arp();
 
     // ============================================================
-    // Test 2: CMD_START with no credit -> No data (credit=0)
+    // Test 2: ICMP Echo Request -> Echo Reply
     // ============================================================
     test_num = 2;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 2: CMD_START with no credit", $time);
+    $display("[%0t] Test 2: ICMP Echo Request -> Echo Reply", $time);
+    $display("[%0t] ========================================", $time);
+
+    reset_tx_capture();
+    send_icmp_echo_request(16'h1234, 16'h0001, 32);
+    repeat(100) @(posedge clk);
+    $display("[%0t] DEBUG: After 100 cycles, tx_frame_count = %0d", $time, tx_frame_count);
+    repeat(100) @(posedge clk);
+    $display("[%0t] DEBUG: After 200 cycles, tx_frame_count = %0d", $time, tx_frame_count);
+    repeat(100) @(posedge clk);
+    $display("[%0t] DEBUG: After 300 cycles, tx_frame_count = %0d", $time, tx_frame_count);
+    repeat(100) @(posedge clk);
+    $display("[%0t] DEBUG: After 400 cycles, tx_frame_count = %0d", $time, tx_frame_count);
+    repeat(100) @(posedge clk);
+    $display("[%0t] DEBUG: After 500 cycles, tx_frame_count = %0d", $time, tx_frame_count);
+    repeat(2500) @(posedge clk);
+
+    if (tx_frame_count > 0) begin
+        verify_icmp_echo_reply(16'h1234, 16'h0001);
+    end else begin
+        $display("[%0t] ERROR: No ICMP echo reply received", $time);
+        error_count = error_count + 1;
+    end
+
+    // ============================================================
+    // Test 3: CMD_START with no credit -> No data (credit=0)
+    // ============================================================
+    test_num = 3;
+    $display("");
+    $display("[%0t] ========================================", $time);
+    $display("[%0t] Test 3: CMD_START with no credit", $time);
     $display("[%0t] ========================================", $time);
 
     reset_tx_capture();
@@ -834,12 +1041,12 @@ initial begin
     end
 
     // ============================================================
-    // Test 3: Send CREDIT -> Data packets flow
+    // Test 4: Send CREDIT -> Data packets flow
     // ============================================================
-    test_num = 3;
+    test_num = 4;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 3: CREDIT -> Data packets flow", $time);
+    $display("[%0t] Test 4: CREDIT -> Data packets flow", $time);
     $display("[%0t] ========================================", $time);
 
     reset_tx_capture();
@@ -858,12 +1065,12 @@ initial begin
     end
 
     // ============================================================
-    // Test 4: CMD_STOP -> Data stops
+    // Test 5: CMD_STOP -> Data stops
     // ============================================================
-    test_num = 4;
+    test_num = 5;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 4: CMD_STOP -> Data stops", $time);
+    $display("[%0t] Test 5: CMD_STOP -> Data stops", $time);
     $display("[%0t] ========================================", $time);
 
     reset_tx_capture();
@@ -877,12 +1084,12 @@ initial begin
     end
 
     // ============================================================
-    // Test 5: CMD_START with CPL flag -> CMD_CPL response
+    // Test 6: CMD_START with CPL flag -> CMD_CPL response
     // ============================================================
-    test_num = 5;
+    test_num = 6;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 5: CMD_START with CPL flag", $time);
+    $display("[%0t] Test 6: CMD_START with CPL flag", $time);
     $display("[%0t] ========================================", $time);
 
     // Ensure ARP cache is fresh
@@ -904,12 +1111,12 @@ initial begin
     end
 
     // ============================================================
-    // Test 6: Send CREDIT after START -> More data
+    // Test 7: Send CREDIT after START -> More data
     // ============================================================
-    test_num = 6;
+    test_num = 7;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 6: CREDIT after START -> Data flow", $time);
+    $display("[%0t] Test 7: CREDIT after START -> Data flow", $time);
     $display("[%0t] ========================================", $time);
 
     reset_tx_capture();
@@ -921,7 +1128,7 @@ initial begin
     // After previous tests, seq_num is at 8. With credit=16, 8 more packets can be sent.
     // The last captured frame should have seq = 8 + tx_frame_count - 1
     if (tx_frame_count > 0) begin
-        $display("[%0t] INFO: Captured %0d data frames in Test 6", $time, tx_frame_count);
+        $display("[%0t] INFO: Captured %0d data frames in Test 7", $time, tx_frame_count);
         verify_ludp_data(32'h8 + tx_frame_count - 1, 16'd64);
     end else begin
         $display("[%0t] ERROR: No data frame captured", $time);
@@ -929,9 +1136,9 @@ initial begin
     end
 
     // ============================================================
-    // Test 7: Jumbo frame (9KB) data transfer
+    // Test 8: Jumbo frame (9KB) data transfer
     // ============================================================
-    test_num = 7;
+    test_num = 8;
     $display("");
     $display("[%0t] ========================================", $time);
     $display("[%0t] Test 7: Jumbo frame (9KB) data transfer", $time);
@@ -962,12 +1169,12 @@ initial begin
     end
 
     // ============================================================
-    // Test 8: Small tail frame (16 bytes) data transfer
+    // Test 9: Small tail frame (16 bytes) data transfer
     // ============================================================
-    test_num = 8;
+    test_num = 9;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 8: Small tail frame (16 bytes)", $time);
+    $display("[%0t] Test 9: Small tail frame (16 bytes)", $time);
     $display("[%0t] ========================================", $time);
 
     // Reset DUT to flush stale FIFO data from previous test
@@ -993,13 +1200,13 @@ initial begin
     end
 
     // ============================================================
-    // Test 9: Verify IP destination in response packets
+    // Test 10: Verify IP destination in response packets
     // This catches the bug where FPGA sends to wrong host IP
     // ============================================================
-    test_num = 9;
+    test_num = 10;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 9: Verify IP destination in responses", $time);
+    $display("[%0t] Test 10: Verify IP destination in responses", $time);
     $display("[%0t] ========================================", $time);
 
     reset_dut();
@@ -1017,12 +1224,12 @@ initial begin
     end
 
     // ============================================================
-    // Test 10: Verify UDP checksum is 0 (disabled)
+    // Test 11: Verify UDP checksum is 0 (disabled)
     // ============================================================
-    test_num = 10;
+    test_num = 11;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 10: Verify UDP checksum is 0", $time);
+    $display("[%0t] Test 11: Verify UDP checksum is 0", $time);
     $display("[%0t] ========================================", $time);
 
     reset_tx_capture();
@@ -1037,13 +1244,13 @@ initial begin
     end
 
     // ============================================================
-    // Test 11: Verify response after reset and ARP re-resolution
+    // Test 12: Verify response after reset and ARP re-resolution
     // This tests that the FPGA can recover from reset and re-establish communication
     // ============================================================
-    test_num = 11;
+    test_num = 12;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 11: Recovery after reset", $time);
+    $display("[%0t] Test 12: Recovery after reset", $time);
     $display("[%0t] ========================================", $time);
 
     // Reset DUT

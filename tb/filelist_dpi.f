@@ -1,4 +1,6 @@
+dpi_fifo.sv
 ../rtl/ludp_protocol.sv
+../rtl/icmp_echo_reply.sv
 ../rtl/fpga_core.v
 ../lib/eth/rtl/eth_mac_10g_fifo.v
 ../lib/eth/rtl/eth_mac_10g.v
@@ -38,4 +40,4 @@
 ../lib/eth/lib/axis/rtl/axis_async_fifo.v
 ../lib/eth/lib/axis/rtl/axis_async_fifo_adapter.v
 ../lib/eth/lib/axis/rtl/sync_reset.v
-tb_fpga_core.v
+tb_fpga_core_dpi.v
