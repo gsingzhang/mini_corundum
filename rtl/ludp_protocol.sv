@@ -493,6 +493,7 @@ module ludp_protocol #(
                                     case (rx_pkt_opcode_reg)
                                         CMD_START: begin
                                             burst_active_reg <= 1'b1;
+                                            seq_num_reg      <= 0;
                                         end
                                         CMD_STOP: begin
                                             burst_active_reg <= 1'b0;
