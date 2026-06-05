@@ -485,9 +485,12 @@ class LudpHost:
     # ------------------------------------------------------------------
 
     def _poll_loop(self) -> None:
-        """Periodic tasks: resend credit if no data flowing."""
+        """Periodic tasks: resend credit, skip gaps if FPGA can't retransmit."""
         last_data_time = time.time()
         last_debug_time = time.time()
+        last_expected_seq = self.expected_seq
+        gap_stall_start = None
+
         while self.running:
             time.sleep(self.credit_poll_ms / 1000.0)
             if not self.running:
@@ -501,6 +504,37 @@ class LudpHost:
             if self.debug and now - last_debug_time >= 1.0:
                 last_debug_time = now
                 print(f"[DEBUG POLL] rx={self.stats.packets_received} processed={self.stats.packets_processed} expected_seq={self.expected_seq} abs_credit={self.abs_credit}")
+
+            # Gap skip: if expected_seq hasn't advanced and we have OOO packets,
+            # skip the gap since FPGA cannot retransmit missing packets.
+            if self.expected_seq != last_expected_seq:
+                last_expected_seq = self.expected_seq
+                gap_stall_start = None
+            elif self.out_of_order:
+                if gap_stall_start is None:
+                    gap_stall_start = now
+                elif now - gap_stall_start > 0.1:  # 100ms gap timeout
+                    # Skip to the lowest sequence in the OOO buffer
+                    skip_to = min(self.out_of_order.keys())
+                    if self.debug:
+                        print(f"[DEBUG GAP SKIP] expected_seq {self.expected_seq} -> {skip_to} (skipped {skip_to - self.expected_seq} packets)")
+                    with self.lock:
+                        self.stats.gap_count += skip_to - self.expected_seq
+                    self.expected_seq = skip_to
+                    # Deliver the packet and drain
+                    self._deliver(self.out_of_order[skip_to])
+                    del self.out_of_order[skip_to]
+                    self.expected_seq += 1
+                    while self.expected_seq in self.out_of_order:
+                        self._deliver(self.out_of_order[self.expected_seq])
+                        del self.out_of_order[self.expected_seq]
+                        self.expected_seq += 1
+                    # Always update credit after gap skip to unblock FPGA
+                    new_credit = self.expected_seq + self.window_size
+                    self.send_credit(new_credit)
+                    self.abs_credit = new_credit
+                    gap_stall_start = None
+                    last_expected_seq = self.expected_seq
 
             if now - last_data_time > self.credit_poll_ms / 1000.0 * 2:
                 self.send_credit(self.abs_credit)
