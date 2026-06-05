@@ -497,6 +497,7 @@ module ludp_protocol #(
                                         CMD_START: begin
                                             burst_active_reg <= 1'b1;
                                             seq_num_reg      <= 0;
+                                            abs_credit_reg   <= 0;
                                         end
                                         CMD_STOP: begin
                                             burst_active_reg <= 1'b0;
@@ -530,17 +531,11 @@ module ludp_protocol #(
                                 end
                             endcase
                         end
-                    end else if (rx_udp_hdr_valid && rx_udp_hdr_ready) begin
-                        // Prepare for new RX packet - capture source address for response routing
-                        rx_magic_reg    <= 0;
-                        rx_type_reg     <= 0;
-                        rx_flags_reg    <= 0;
-                        rx_seq_reg      <= 0;
-                        rx_src_mac_reg  <= rx_udp_eth_src_mac;
-                        rx_src_ip_reg   <= rx_udp_ip_source_ip;
-                        rx_src_port_reg <= rx_udp_source_port;
                     end else if (resp_valid_reg) begin
                         // Prepare response packet header (fixed 24-byte UDP payload)
+                        // Response has priority over new RX and data to ensure CMD_ACK/CPL
+                        // is always sent promptly. Without this, continuous CREDIT packets
+                        // from the host can starve response transmission.
                         tx_hdr_sent_reg   <= 0;
                         tx_beat_count_reg <= 0;
                         tx_is_data_reg    <= 1'b0;
@@ -554,6 +549,15 @@ module ludp_protocol #(
                             tx_header_beat0_reg <= {resp_cmd_id_reg, resp_status_reg, TYPE_CMD_ACK, MAGIC};
                             tx_header_beat1_reg <= {48'h0, resp_opcode_reg};
                         end
+                    end else if (rx_udp_hdr_valid && rx_udp_hdr_ready) begin
+                        // Prepare for new RX packet - capture source address for response routing
+                        rx_magic_reg    <= 0;
+                        rx_type_reg     <= 0;
+                        rx_flags_reg    <= 0;
+                        rx_seq_reg      <= 0;
+                        rx_src_mac_reg  <= rx_udp_eth_src_mac;
+                        rx_src_ip_reg   <= rx_udp_ip_source_ip;
+                        rx_src_port_reg <= rx_udp_source_port;
                     end else if (tx_data_axis_tvalid && can_send) begin
                         // Prepare data packet header with variable payload
                         // Use payload_size hint from upstream for correct UDP header
