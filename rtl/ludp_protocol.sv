@@ -515,8 +515,13 @@ module ludp_protocol #(
                                 end
 
                                 TYPE_CREDIT: begin
-                                    // Update flow control credit
                                     abs_credit_reg <= rx_pkt_seq_reg;
+                                    resp_opcode_reg <= 8'h06;
+                                    resp_cmd_id_reg <= rx_pkt_seq_reg;
+                                    resp_status_reg <= 8'h00;
+                                    resp_data_reg   <= {16'h0, burst_active_reg, abs_credit_reg[15:0]};
+                                    resp_valid_reg  <= 1'b1;
+                                    resp_is_cpl_reg <= 1'b0;
                                 end
 
                                 default: begin
@@ -558,6 +563,7 @@ module ludp_protocol #(
                         tx_hdr_sent_reg         <= 0;
                         tx_beat_count_reg       <= 0;
                         tx_is_data_reg          <= 1'b1;
+                        $display("[%0t] LUDP: DATA TX start seq=%0d payload_size=%0d", $time, seq_num_reg, tx_data_payload_size);
                     end
                 end
 

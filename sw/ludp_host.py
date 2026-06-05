@@ -95,7 +95,7 @@ class LudpStats:
     @property
     def throughput_mbps(self) -> float:
         """Calculate throughput in Mbps."""
-        elapsed = time.time() - self.stats.start_time
+        elapsed = time.time() - self.start_time
         if elapsed <= 0:
             return 0.0
         return (self.bytes_received * 8) / (elapsed * 1e6)
@@ -103,13 +103,13 @@ class LudpStats:
     @property
     def packet_rate_kpps(self) -> float:
         """Calculate packet rate in kpps."""
-        elapsed = time.time() - self.stats.start_time
+        elapsed = time.time() - self.start_time
         if elapsed <= 0:
             return 0.0
         return self.packets_received / (elapsed * 1000)
 
     def __str__(self) -> str:
-        elapsed = time.time() - self.stats.start_time
+        elapsed = time.time() - self.start_time
         return (
             f"Stats: {self.packets_processed} processed, "
             f"{self.packets_out_of_order} OOO, "
@@ -319,6 +319,8 @@ class LudpHost:
         """Send explicit credit update to FPGA."""
         pkt = self._build_credit(abs_credit)
         self.sock.sendto(pkt, self.fpga_addr)
+        if self.debug:
+            print(f"[DEBUG TX] CREDIT {len(pkt)}B to {self.fpga_addr}: abs_credit={abs_credit} hex={pkt.hex()}")
         with self.lock:
             self.stats.credits_sent += 1
 
@@ -458,10 +460,15 @@ class LudpHost:
                 print(f"[DEBUG CMD_ACK] Too short: {len(data)}B")
             return
         cmd_id = struct.unpack("<I", data[4:8])[0]
+        status = data[3]
+        opcode = struct.unpack("<H", data[8:10])[0] if len(data) >= 10 else 0
         if self.debug:
-            status = data[3]
-            opcode = struct.unpack("<H", data[8:10])[0] if len(data) >= 10 else 0
-            print(f"[DEBUG CMD_ACK] cmd_id={cmd_id} status={status} opcode=0x{opcode:04x} pending={list(self.pending_cmds.keys())}")
+            if opcode == 0x0006:
+                burst_active = (cmd_id >> 16) & 0x1
+                credit_val = cmd_id & 0xFFFF
+                print(f"[DEBUG CREDIT_ACK] credit={credit_val} burst_active={burst_active} status={status}")
+            else:
+                print(f"[DEBUG CMD_ACK] cmd_id={cmd_id} status={status} opcode=0x{opcode:04x} pending={list(self.pending_cmds.keys())}")
         with self.lock:
             if cmd_id in self.pending_cmds:
                 self.pending_cmds[cmd_id]["response"] = data
@@ -484,19 +491,22 @@ class LudpHost:
     def _poll_loop(self) -> None:
         """Periodic tasks: resend credit if no data flowing."""
         last_data_time = time.time()
+        last_debug_time = time.time()
         while self.running:
             time.sleep(self.credit_poll_ms / 1000.0)
             if not self.running:
                 break
 
-            # If no data received recently, resend credit (keep-alive)
             now = time.time()
             with self.lock:
                 if self.stats.packets_received > 0:
                     last_data_time = now
 
+            if self.debug and now - last_debug_time >= 1.0:
+                last_debug_time = now
+                print(f"[DEBUG POLL] rx={self.stats.packets_received} processed={self.stats.packets_processed} expected_seq={self.expected_seq} abs_credit={self.abs_credit}")
+
             if now - last_data_time > self.credit_poll_ms / 1000.0 * 2:
-                # No data for a while, resend credit
                 self.send_credit(self.abs_credit)
                 last_data_time = now
 

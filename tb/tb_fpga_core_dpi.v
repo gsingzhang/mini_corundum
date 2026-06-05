@@ -246,7 +246,8 @@ initial begin
     rst = 0;
     sfp0_tx_rst = 0;
     sfp0_rx_rst = 0;
-    repeat(100) @(posedge clk);
+    // Wait for ARP cache to finish clearing (512 entries @ 1 cycle each)
+    repeat(600) @(posedge clk);
 
     $display("[%0t] Reset complete, total packets from DPI: %0d", $time, dpi_get_total_packets());
 
@@ -260,9 +261,9 @@ initial begin
 
     $display("[%0t] All DPI packets fed (%0d packets)", $time, dpi_pkt_count);
 
-    // Wait for responses
+    // Wait for responses (increased timeout for DATA packets)
     timeout = 0;
-    while (timeout < 10000) begin
+    while (timeout < 200000) begin
         @(posedge clk);
         timeout = timeout + 1;
 
