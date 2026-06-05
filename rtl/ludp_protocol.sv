@@ -266,13 +266,16 @@ module ludp_protocol #(
 
         case (state_reg)
             STATE_IDLE: begin
-                // Priority: RX command > TX response > TX data
+                // Priority: RX command > TX data > TX response
+                // Data has higher priority than responses to maximize throughput.
+                // CMD_ACK/CPL responses can be delayed a few cycles without issue
+                // since the host uses timeout-based retry.
                 if (rx_udp_hdr_valid && rx_udp_hdr_ready) begin
                     state_next = STATE_RX_CMD;
-                end else if (resp_valid_reg) begin
-                    state_next = STATE_TX_RESP;
                 end else if (tx_data_axis_tvalid && can_send) begin
                     state_next = STATE_TX_HEADER;
+                end else if (resp_valid_reg) begin
+                    state_next = STATE_TX_RESP;
                 end
             end
 
@@ -516,13 +519,10 @@ module ludp_protocol #(
                                 end
 
                                 TYPE_CREDIT: begin
+                                    // Update credit limit without generating a response.
+                                    // The host does not wait for CREDIT ACK, so sending
+                                    // a response only blocks data transmission.
                                     abs_credit_reg <= rx_pkt_seq_reg;
-                                    resp_opcode_reg <= 8'h06;
-                                    resp_cmd_id_reg <= rx_pkt_seq_reg;
-                                    resp_status_reg <= 8'h00;
-                                    resp_data_reg   <= {16'h0, burst_active_reg, abs_credit_reg[15:0]};
-                                    resp_valid_reg  <= 1'b1;
-                                    resp_is_cpl_reg <= 1'b1;  // Use CMD_CPL to include resp_data_reg
                                 end
 
                                 default: begin
