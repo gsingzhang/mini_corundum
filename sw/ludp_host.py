@@ -27,6 +27,7 @@ import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from heapq import heappush, heappop
 from typing import Callable, Dict, List, Optional
 
 # ============================================================================
@@ -167,6 +168,7 @@ class LudpHost:
         self.expected_seq = 0
         self.abs_credit = window_size
         self.out_of_order: Dict[int, LudpDataPacket] = {}
+        self.ooo_heap: List[int] = []  # Min-heap for O(1) min seq lookup
         self.pending_nacks: Dict[int, float] = {}  # seq -> last_nack_time
         self.running = False
         self.stats = LudpStats()
@@ -411,10 +413,12 @@ class LudpHost:
             self._deliver(pkt)
             self.expected_seq += 1
 
-            # Drain out-of-order buffer
-            while self.expected_seq in self.out_of_order:
-                self._deliver(self.out_of_order[self.expected_seq])
-                del self.out_of_order[self.expected_seq]
+            # Drain out-of-order buffer using heap
+            while self.ooo_heap and self.ooo_heap[0] < self.expected_seq:
+                heappop(self.ooo_heap)  # Remove stale entries
+            while self.ooo_heap and self.ooo_heap[0] == self.expected_seq:
+                seq = heappop(self.ooo_heap)
+                self._deliver(self.out_of_order.pop(seq))
                 self.expected_seq += 1
 
             # Send credit update
@@ -429,10 +433,9 @@ class LudpHost:
                 self.stats.packets_out_of_order += 1
                 self.stats.gap_count += 1
 
-            # Store out-of-order packet
-            # Note: NACK sending is disabled because the FPGA does not implement
-            # retransmission. Sending NACKs only wastes CPU and bandwidth, and
-            # can cause a vicious cycle (NACKs consume recv CPU → more drops → more NACKs).
+            # Store out-of-order packet with min-heap for O(1) lookup
+            if pkt.seq_num not in self.out_of_order:
+                heappush(self.ooo_heap, pkt.seq_num)
             self.out_of_order[pkt.seq_num] = pkt
 
         # Old packet (already processed)
@@ -514,20 +517,22 @@ class LudpHost:
                 if gap_stall_start is None:
                     gap_stall_start = now
                 elif now - gap_stall_start > 0.1:  # 100ms gap timeout
-                    # Skip to the lowest sequence in the OOO buffer
-                    skip_to = min(self.out_of_order.keys())
+                    # Skip to the lowest sequence in the OOO buffer (O(1) via heap)
+                    while self.ooo_heap and self.ooo_heap[0] < self.expected_seq:
+                        heappop(self.ooo_heap)
+                    if not self.ooo_heap:
+                        gap_stall_start = None
+                        continue
+                    skip_to = self.ooo_heap[0]
                     if self.debug:
                         print(f"[DEBUG GAP SKIP] expected_seq {self.expected_seq} -> {skip_to} (skipped {skip_to - self.expected_seq} packets)")
                     with self.lock:
                         self.stats.gap_count += skip_to - self.expected_seq
                     self.expected_seq = skip_to
-                    # Deliver the packet and drain
-                    self._deliver(self.out_of_order[skip_to])
-                    del self.out_of_order[skip_to]
-                    self.expected_seq += 1
-                    while self.expected_seq in self.out_of_order:
-                        self._deliver(self.out_of_order[self.expected_seq])
-                        del self.out_of_order[self.expected_seq]
+                    # Drain from the skipped position
+                    while self.ooo_heap and self.ooo_heap[0] == self.expected_seq:
+                        seq = heappop(self.ooo_heap)
+                        self._deliver(self.out_of_order.pop(seq))
                         self.expected_seq += 1
                     # Always update credit after gap skip to unblock FPGA
                     new_credit = self.expected_seq + self.window_size
@@ -586,11 +591,22 @@ def main():
 
 def run_logger(args):
     """Data logger mode: receive data for a fixed duration."""
-    output_file = open(args.output, "wb")
+    output_file = open(args.output, "wb", buffering=8*1024*1024)
     print(f"[APP] Writing raw payload data to {args.output}")
 
+    # Use a list buffer to batch file writes and reduce I/O blocking
+    write_buf = []
+    write_buf_size = 0
+    FLUSH_THRESHOLD = 4 * 1024 * 1024  # Flush every 4 MB
+
     def on_data(pkt: LudpDataPacket):
-        output_file.write(pkt.payload)
+        nonlocal write_buf_size
+        write_buf.append(pkt.payload)
+        write_buf_size += len(pkt.payload)
+        if write_buf_size >= FLUSH_THRESHOLD:
+            output_file.write(b"".join(write_buf))
+            write_buf.clear()
+            write_buf_size = 0
 
     host = LudpHost(
         fpga_ip=args.fpga_ip,
@@ -625,6 +641,10 @@ def run_logger(args):
     print(f"[APP] {stats}")
 
     host.stop()
+    # Flush remaining buffered data
+    if write_buf:
+        output_file.write(b"".join(write_buf))
+        write_buf.clear()
     output_file.close()
     print(f"[APP] Data saved to {args.output}")
 
