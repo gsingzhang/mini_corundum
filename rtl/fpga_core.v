@@ -314,7 +314,7 @@ wire        ludp_tx_fifo_axis_tlast;
 wire        ludp_tx_fifo_axis_tuser;
 
 axis_fifo #(
-    .DEPTH(64),
+    .DEPTH(16384),
     .DATA_WIDTH(64),
     .KEEP_ENABLE(1),
     .KEEP_WIDTH(8),
