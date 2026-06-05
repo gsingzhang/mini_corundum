@@ -522,7 +522,7 @@ module ludp_protocol #(
                                     resp_status_reg <= 8'h00;
                                     resp_data_reg   <= {16'h0, burst_active_reg, abs_credit_reg[15:0]};
                                     resp_valid_reg  <= 1'b1;
-                                    resp_is_cpl_reg <= 1'b0;
+                                    resp_is_cpl_reg <= 1'b1;  // Use CMD_CPL to include resp_data_reg
                                 end
 
                                 default: begin

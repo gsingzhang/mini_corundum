@@ -284,36 +284,38 @@ class LudpHost:
         return None
 
     def _send_cmd_wait_ack(
-        self, opcode: int, name: str, arg1: int = 0, arg2: int = 0
+        self, opcode: int, name: str, arg1: int = 0, arg2: int = 0, retries: int = 3
     ) -> bool:
-        """Send a posted CMD and wait for CMD_ACK."""
-        cmd_id = self.next_cmd_id
-        self.next_cmd_id += 1
-        pkt = self._build_cmd(opcode, arg1=arg1, arg2=arg2, flags=0x00, cmd_id=cmd_id)
+        """Send a posted CMD and wait for CMD_ACK with retry."""
+        for attempt in range(retries):
+            cmd_id = self.next_cmd_id
+            self.next_cmd_id += 1
+            pkt = self._build_cmd(opcode, arg1=arg1, arg2=arg2, flags=0x00, cmd_id=cmd_id)
 
-        with self.lock:
-            self.pending_cmds[cmd_id] = {
-                "event": threading.Event(),
-                "response": None,
-            }
+            with self.lock:
+                self.pending_cmds[cmd_id] = {
+                    "event": threading.Event(),
+                    "response": None,
+                }
 
-        self.sock.sendto(pkt, self.fpga_addr)
+            self.sock.sendto(pkt, self.fpga_addr)
 
-        if self.debug:
-            print(f"[DEBUG TX] {len(pkt)}B to {self.fpga_addr}: {pkt.hex()}")
+            if self.debug:
+                print(f"[DEBUG TX] {len(pkt)}B to {self.fpga_addr}: {pkt.hex()}")
 
-        success = self.pending_cmds[cmd_id]["event"].wait(
-            timeout=self.cmd_timeout_ms / 1000.0
-        )
-        with self.lock:
-            if cmd_id in self.pending_cmds:
-                del self.pending_cmds[cmd_id]
+            success = self.pending_cmds[cmd_id]["event"].wait(
+                timeout=self.cmd_timeout_ms / 1000.0
+            )
+            with self.lock:
+                if cmd_id in self.pending_cmds:
+                    del self.pending_cmds[cmd_id]
 
-        if success:
-            print(f"[OK] {name} command acknowledged")
-        else:
-            print(f"[TIMEOUT] {name} command no ACK")
-        return success
+            if success:
+                print(f"[OK] {name} command acknowledged")
+                return True
+
+        print(f"[TIMEOUT] {name} command no ACK after {retries} retries")
+        return False
 
     def send_credit(self, abs_credit: int) -> None:
         """Send explicit credit update to FPGA."""
@@ -428,23 +430,14 @@ class LudpHost:
                 self.stats.gap_count += 1
 
             # Store out-of-order packet
+            # Note: NACK sending is disabled because the FPGA does not implement
+            # retransmission. Sending NACKs only wastes CPU and bandwidth, and
+            # can cause a vicious cycle (NACKs consume recv CPU → more drops → more NACKs).
             self.out_of_order[pkt.seq_num] = pkt
 
-            # Send NACK for missing sequences
-            for miss_seq in range(self.expected_seq, pkt.seq_num):
-                now = time.time() * 1000
-                last_nack = self.pending_nacks.get(miss_seq, 0)
-                if now - last_nack > self.nack_timeout_ms:
-                    nack_pkt = self._build_nack(miss_seq, pkt.seq_num - self.expected_seq)
-                    self.sock.sendto(nack_pkt, self.fpga_addr)
-                    self.pending_nacks[miss_seq] = now
-                    with self.lock:
-                        self.stats.nacks_sent += 1
-
-        # Old packet (retransmission we already processed)
+        # Old packet (already processed)
         else:
-            if pkt.is_retransmit and pkt.seq_num in self.pending_nacks:
-                del self.pending_nacks[pkt.seq_num]
+            pass
 
     def _deliver(self, pkt: LudpDataPacket) -> None:
         """Deliver an in-order packet to the application layer."""
@@ -463,22 +456,25 @@ class LudpHost:
         status = data[3]
         opcode = struct.unpack("<H", data[8:10])[0] if len(data) >= 10 else 0
         if self.debug:
-            if opcode == 0x0006:
-                burst_active = (cmd_id >> 16) & 0x1
-                credit_val = cmd_id & 0xFFFF
-                print(f"[DEBUG CREDIT_ACK] credit={credit_val} burst_active={burst_active} status={status}")
-            else:
-                print(f"[DEBUG CMD_ACK] cmd_id={cmd_id} status={status} opcode=0x{opcode:04x} pending={list(self.pending_cmds.keys())}")
+            print(f"[DEBUG CMD_ACK] cmd_id={cmd_id} status={status} opcode=0x{opcode:04x} pending={list(self.pending_cmds.keys())}")
         with self.lock:
             if cmd_id in self.pending_cmds:
                 self.pending_cmds[cmd_id]["response"] = data
                 self.pending_cmds[cmd_id]["event"].set()
 
     def _handle_cmd_cpl(self, data: bytes) -> None:
-        """Handle CMD_CPL from FPGA."""
+        """Handle CMD_CPL from FPGA (includes CREDIT_ACK with resp_data)."""
         if len(data) < 16:
             return
         cmd_id = struct.unpack("<I", data[4:8])[0]
+        opcode = struct.unpack("<H", data[8:10])[0] if len(data) >= 10 else 0
+        resp_data = struct.unpack("<I", data[10:14])[0] if len(data) >= 14 else 0
+
+        if self.debug and opcode == 0x0006:
+            burst_active = (resp_data >> 16) & 0x1
+            credit_val = resp_data & 0xFFFF
+            print(f"[DEBUG CREDIT_ACK] credit={credit_val} burst_active={burst_active} cmd_id={cmd_id}")
+
         with self.lock:
             if cmd_id in self.pending_cmds:
                 self.pending_cmds[cmd_id]["response"] = data
