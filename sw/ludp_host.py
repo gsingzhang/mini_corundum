@@ -141,7 +141,7 @@ class LudpHost:
         window_size: int = DEFAULT_WINDOW_SIZE,
         credit_interval: int = DEFAULT_CREDIT_INTERVAL,
         nack_timeout_ms: float = 5.0,
-        credit_poll_ms: float = 50.0,
+        credit_poll_ms: float = 5.0,
         cmd_timeout_ms: float = 100.0,
         on_data: Optional[Callable[[LudpDataPacket], None]] = None,
         debug: bool = False,
@@ -167,6 +167,7 @@ class LudpHost:
         # State
         self.expected_seq = 0
         self.abs_credit = window_size
+        self.highest_seq = 0  # Highest seq received (for credit advancement)
         self.out_of_order: Dict[int, LudpDataPacket] = {}
         self.ooo_heap: List[int] = []  # Min-heap for O(1) min seq lookup
         self.pending_nacks: Dict[int, float] = {}  # seq -> last_nack_time
@@ -408,6 +409,10 @@ class LudpHost:
             if pkt.is_retransmit:
                 self.stats.packets_retransmitted += 1
 
+        # Track highest received sequence for credit advancement
+        if pkt.seq_num > self.highest_seq:
+            self.highest_seq = pkt.seq_num
+
         # In-order packet
         if pkt.seq_num == self.expected_seq:
             self._deliver(pkt)
@@ -421,7 +426,7 @@ class LudpHost:
                 self._deliver(self.out_of_order.pop(seq))
                 self.expected_seq += 1
 
-            # Send credit update
+            # Send credit update based on in-order progress
             if self.expected_seq % self.credit_interval == 0:
                 new_credit = self.expected_seq + self.window_size
                 self.send_credit(new_credit)
@@ -488,7 +493,7 @@ class LudpHost:
     # ------------------------------------------------------------------
 
     def _poll_loop(self) -> None:
-        """Periodic tasks: resend credit, skip gaps if FPGA can't retransmit."""
+        """Periodic tasks: advance credit, skip gaps if FPGA can't retransmit."""
         last_data_time = time.time()
         last_debug_time = time.time()
         last_expected_seq = self.expected_seq
@@ -506,7 +511,14 @@ class LudpHost:
 
             if self.debug and now - last_debug_time >= 1.0:
                 last_debug_time = now
-                print(f"[DEBUG POLL] rx={self.stats.packets_received} processed={self.stats.packets_processed} expected_seq={self.expected_seq} abs_credit={self.abs_credit}")
+                print(f"[DEBUG POLL] rx={self.stats.packets_received} processed={self.stats.packets_processed} expected_seq={self.expected_seq} highest_seq={self.highest_seq} abs_credit={self.abs_credit}")
+
+            # Advance credit based on highest received seq to keep FPGA sending.
+            # This prevents credit window stall when packets arrive out of order.
+            new_credit = self.highest_seq + 1 + self.window_size
+            if new_credit > self.abs_credit:
+                self.send_credit(new_credit)
+                self.abs_credit = new_credit
 
             # Gap skip: if expected_seq hasn't advanced and we have OOO packets,
             # skip the gap since FPGA cannot retransmit missing packets.

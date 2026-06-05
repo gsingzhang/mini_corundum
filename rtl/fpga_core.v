@@ -273,7 +273,7 @@ reg        test_data_valid_reg = 0;
 reg        test_data_last_reg = 0;
 reg [15:0] test_data_count_reg = 0;
 reg        burst_active_dly = 0;
-reg [15:0] test_data_payload_size_reg = 1456;  // Fits standard MTU=1500 without IP fragmentation
+reg [15:0] test_data_payload_size_reg = 8960;  // Jumbo frame payload (requires MTU>=9000)
 wire       test_data_fifo_tready;
 
 always @(posedge clk) begin
@@ -283,7 +283,7 @@ always @(posedge clk) begin
         test_data_last_reg <= 1'b0;
         test_data_count_reg <= 16'h0;
         burst_active_dly <= 1'b0;
-        test_data_payload_size_reg <= 1456;  // Fits standard MTU=1500
+        test_data_payload_size_reg <= 8960;  // Jumbo frame payload
     end else begin
         burst_active_dly <= ludp_burst_active;
 

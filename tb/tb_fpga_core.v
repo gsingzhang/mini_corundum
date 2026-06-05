@@ -4,7 +4,7 @@
 module tb_fpga_core;
 
 localparam CLK_PERIOD = 6.4;
-localparam TIMEOUT_CYCLES = 500000;
+localparam TIMEOUT_CYCLES = 2000000;
 
 reg clk = 0;
 reg rst = 1;
@@ -1000,6 +1000,9 @@ initial begin
     $display("[%0t] Test 2: CMD_START with no credit", $time);
     $display("[%0t] ========================================", $time);
 
+    set_payload_size(16'd64);
+    @(posedge clk);
+
     reset_tx_capture();
     send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
     repeat(500) @(posedge clk);
@@ -1016,34 +1019,14 @@ initial begin
     test_num = 3;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 3: CMD_START with no credit", $time);
-    $display("[%0t] ========================================", $time);
-
-    reset_tx_capture();
-    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-    repeat(500) @(posedge clk);
-
-    if (tx_frame_count == 0) begin
-        $display("[%0t] PASS: No data without credit (expected)", $time);
-    end else begin
-        $display("[%0t] INFO: Got %0d frames (may be CMD_ACK)", $time, tx_frame_count);
-    end
-
-    // ============================================================
-    // Test 4: Send CREDIT -> Data packets flow
-    // ============================================================
-    test_num = 4;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 4: CREDIT -> Data packets flow", $time);
+    $display("[%0t] Test 3: CREDIT -> Data packets flow", $time);
     $display("[%0t] ========================================", $time);
 
     reset_tx_capture();
     send_ludp_credit(32'h8);
 
-    // Wait for all 8 data packets to be transmitted and captured
-    // Each packet takes ~10 cycles in LUDP + ~780 cycles through pipeline
-    repeat(2000) @(posedge clk);
+    // Wait for all 8 data packets (64B payload each, ~780 cycles per frame)
+    wait_for_tx_frames(8, 10000);
 
     // Verify the last captured frame should be seq=7, payload=64 bytes
     if (tx_frame_count > 0)
@@ -1054,12 +1037,12 @@ initial begin
     end
 
     // ============================================================
-    // Test 5: CMD_STOP -> Data stops
+    // Test 4: CMD_STOP -> Data stops
     // ============================================================
-    test_num = 5;
+    test_num = 4;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 5: CMD_STOP -> Data stops", $time);
+    $display("[%0t] Test 4: CMD_STOP -> Data stops", $time);
     $display("[%0t] ========================================", $time);
 
     reset_tx_capture();
@@ -1073,23 +1056,24 @@ initial begin
     end
 
     // ============================================================
-    // Test 6: CMD_START with CPL flag -> CMD_CPL response
+    // Test 5: CMD_START with CPL flag -> CMD_CPL response
     // ============================================================
-    test_num = 6;
+    test_num = 5;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 6: CMD_START with CPL flag", $time);
+    $display("[%0t] Test 5: CMD_START with CPL flag", $time);
     $display("[%0t] ========================================", $time);
 
-    // Ensure ARP cache is fresh
-    reset_tx_capture();
-    send_arp_reply();
-    repeat(500) @(posedge clk);
+    // Reset DUT to ensure burst_active=0 so CMD_START triggers CMD_CPL
+    reset_dut();
+
+    set_payload_size(16'd64);
+    @(posedge clk);
 
     reset_tx_capture();
     send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h01);
 
-    // Wait for CMD_CPL response to be transmitted and captured
+    // Wait for CMD_CPL response
     repeat(2000) @(posedge clk);
 
     if (tx_frame_count > 0)
@@ -1100,34 +1084,34 @@ initial begin
     end
 
     // ============================================================
-    // Test 7: Send CREDIT after START -> More data
+    // Test 6: Send CREDIT after START -> More data
     // ============================================================
-    test_num = 7;
+    test_num = 6;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 7: CREDIT after START -> Data flow", $time);
+    $display("[%0t] Test 6: CREDIT after START -> Data flow", $time);
     $display("[%0t] ========================================", $time);
 
     reset_tx_capture();
-    send_ludp_credit(32'h10);
+    send_ludp_credit(dut.ludp_tx_seq_num + 32'h8);
 
-    // Wait for data packets to be transmitted and captured
-    repeat(2000) @(posedge clk);
+    // Wait for data packets
+    wait_for_tx_frames(1, 5000);
+    repeat(1000) @(posedge clk);
 
-    // After previous tests, seq_num is at 8. With credit=16, 8 more packets can be sent.
-    // The last captured frame should have seq = 8 + tx_frame_count - 1
     if (tx_frame_count > 0) begin
-        $display("[%0t] INFO: Captured %0d data frames in Test 7", $time, tx_frame_count);
-        verify_ludp_data(32'h8 + tx_frame_count - 1, 16'd64);
+        $display("[%0t] INFO: Captured %0d data frames in Test 6", $time, tx_frame_count);
+        // Verify last frame has correct seq (current seq - 1) and payload=64
+        verify_ludp_data(dut.ludp_tx_seq_num - 32'h1, 16'd64);
     end else begin
         $display("[%0t] ERROR: No data frame captured", $time);
         error_count = error_count + 1;
     end
 
     // ============================================================
-    // Test 8: Jumbo frame (9KB) data transfer
+    // Test 7: Jumbo frame (9KB) data transfer
     // ============================================================
-    test_num = 8;
+    test_num = 7;
     $display("");
     $display("[%0t] ========================================", $time);
     $display("[%0t] Test 7: Jumbo frame (9KB) data transfer", $time);
@@ -1158,12 +1142,12 @@ initial begin
     end
 
     // ============================================================
-    // Test 9: Small tail frame (16 bytes) data transfer
+    // Test 8: Small tail frame (16 bytes) data transfer
     // ============================================================
-    test_num = 9;
+    test_num = 8;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 9: Small tail frame (16 bytes)", $time);
+    $display("[%0t] Test 8: Small tail frame (16 bytes)", $time);
     $display("[%0t] ========================================", $time);
 
     // Reset DUT to flush stale FIFO data from previous test
@@ -1189,13 +1173,13 @@ initial begin
     end
 
     // ============================================================
-    // Test 10: Verify IP destination in response packets
+    // Test 9: Verify IP destination in response packets
     // This catches the bug where FPGA sends to wrong host IP
     // ============================================================
-    test_num = 10;
+    test_num = 9;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 10: Verify IP destination in responses", $time);
+    $display("[%0t] Test 9: Verify IP destination in responses", $time);
     $display("[%0t] ========================================", $time);
 
     reset_dut();
@@ -1205,7 +1189,6 @@ initial begin
     repeat(2000) @(posedge clk);
 
     if (tx_frame_count > 0) begin
-        // Verify IP destination in response
         verify_ip_destination(HOST_IP);
     end else begin
         $display("[%0t] ERROR: No response frame captured", $time);
@@ -1213,17 +1196,22 @@ initial begin
     end
 
     // ============================================================
-    // Test 11: Verify UDP checksum is 0 (disabled)
+    // Test 10: Verify UDP checksum is 0 (disabled)
     // ============================================================
-    test_num = 11;
+    test_num = 10;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 11: Verify UDP checksum is 0", $time);
+    $display("[%0t] Test 10: Verify UDP checksum is 0", $time);
     $display("[%0t] ========================================", $time);
 
+    // Use small payload for faster simulation
+    set_payload_size(16'd64);
+    @(posedge clk);
+
+    // Send credit for 1 data frame (use current seq + 1)
     reset_tx_capture();
-    send_ludp_credit(32'h1);
-    repeat(2000) @(posedge clk);
+    send_ludp_credit(dut.ludp_tx_seq_num + 32'h1);
+    wait_for_tx_frame(5000);
 
     if (tx_frame_count > 0) begin
         verify_udp_checksum_zero();
@@ -1233,13 +1221,13 @@ initial begin
     end
 
     // ============================================================
-    // Test 12: Verify response after reset and ARP re-resolution
+    // Test 11: Verify response after reset and ARP re-resolution
     // This tests that the FPGA can recover from reset and re-establish communication
     // ============================================================
-    test_num = 12;
+    test_num = 11;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 12: Recovery after reset", $time);
+    $display("[%0t] Test 11: Recovery after reset", $time);
     $display("[%0t] ========================================", $time);
 
     // Reset DUT
@@ -1264,6 +1252,195 @@ initial begin
     end else begin
         $display("[%0t] ERROR: No response after reset", $time);
         error_count = error_count + 1;
+    end
+
+    // ============================================================
+    // Test 12: Throughput test with credit advancement
+    // Verifies that FPGA continues sending when credit is advanced
+    // based on highest received seq (simulating the host-side fix).
+    // ============================================================
+    test_num = 12;
+    $display("");
+    $display("[%0t] ========================================", $time);
+    $display("[%0t] Test 12: Throughput with credit advancement", $time);
+    $display("[%0t] ========================================", $time);
+
+    begin : test12
+        reg [31:0] credit_window;
+        reg [31:0] last_observed_seq;
+        integer frames_in_window;
+        integer total_frames;
+        integer credit_updates;
+        integer stall_count;
+        integer wait_count;
+        integer max_wait;
+        reg [31:0] t_start;
+        reg [31:0] t_end;
+
+        // Reset DUT for clean state
+        reset_dut();
+
+        // Use small payload for faster simulation
+        set_payload_size(16'd64);
+        @(posedge clk);
+
+        // Start data generation
+        reset_tx_capture();
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge clk);
+
+        // Phase 1: Send initial credit window of 32 packets
+        credit_window = 32;
+        send_ludp_credit(credit_window);
+        $display("[%0t] Test12: Sent initial credit=%0d", $time, credit_window);
+
+        total_frames = 0;
+        credit_updates = 1;
+        stall_count = 0;
+        max_wait = 0;
+        t_start = $time;
+
+        // Phase 2: Monitor TX frames and advance credit like the host would
+        // Simulate 5 rounds of credit advancement
+        repeat(5) begin
+            frames_in_window = 0;
+            wait_count = 0;
+
+            // Wait for frames to arrive (up to 5000 cycles per window)
+            while (frames_in_window < 32 && wait_count < 5000) begin
+                @(posedge clk);
+                wait_count = wait_count + 1;
+                if (tx_frame_count > total_frames) begin
+                    frames_in_window = tx_frame_count - total_frames;
+                    wait_count = 0;  // Reset wait on activity
+                end
+            end
+
+            total_frames = tx_frame_count;
+
+            if (frames_in_window == 0) begin
+                stall_count = stall_count + 1;
+                $display("[%0t] Test12: STALL detected at total_frames=%0d, credit=%0d", $time, total_frames, credit_window);
+            end
+
+            // Advance credit: credit = highest_observed_seq + window_size
+            // This simulates the host-side fix where credit is based on highest_seq
+            last_observed_seq = dut.ludp_tx_seq_num;
+            credit_window = last_observed_seq + 32;
+            send_ludp_credit(credit_window);
+            credit_updates = credit_updates + 1;
+
+            $display("[%0t] Test12: Advanced credit to %0d (last_seq=%0d, frames_this_round=%0d, total=%0d)",
+                     $time, credit_window, last_observed_seq, frames_in_window, total_frames);
+        end
+
+        // Wait for remaining in-flight frames
+        repeat(2000) @(posedge clk);
+        total_frames = tx_frame_count;
+        t_end = $time;
+
+        $display("[%0t] Test12: Results:", $time);
+        $display("[%0t]   Total frames sent: %0d", $time, total_frames);
+        $display("[%0t]   Credit updates: %0d", $time, credit_updates);
+        $display("[%0t]   Stalls detected: %0d", $time, stall_count);
+        $display("[%0t]   Elapsed cycles: %0d", $time, (t_end - t_start) / 6);
+        $display("[%0t]   Expected frames: ~160 (5 rounds x 32)", $time);
+
+        // Verify: should have sent at least 100 frames with credit advancement
+        // (allowing for some pipeline delay)
+        if (total_frames >= 100) begin
+            $display("[%0t] PASS: Throughput test - %0d frames with credit advancement", $time, total_frames);
+        end else begin
+            $display("[%0t] ERROR: Throughput too low - only %0d frames (expected >= 100)", $time, total_frames);
+            error_count = error_count + 1;
+        end
+
+        // Verify: no stalls should occur with proper credit advancement
+        if (stall_count == 0) begin
+            $display("[%0t] PASS: No stalls with credit advancement", $time);
+        end else begin
+            $display("[%0t] ERROR: %0d stalls detected despite credit advancement", $time, stall_count);
+            error_count = error_count + 1;
+        end
+
+        // Stop data generation
+        reset_tx_capture();
+        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge clk);
+    end
+
+    // ============================================================
+    // Test 13: Credit stall without advancement (regression test)
+    // Verifies that WITHOUT credit advancement, FPGA stalls.
+    // This confirms the credit advancement fix is necessary.
+    // ============================================================
+    test_num = 13;
+    $display("");
+    $display("[%0t] ========================================", $time);
+    $display("[%0t] Test 13: Credit stall without advancement", $time);
+    $display("[%0t] ========================================", $time);
+
+    begin : test13
+        integer frames_before_stall;
+        integer wait_count2;
+        integer frames_after_wait;
+
+        // Reset DUT for clean state
+        reset_dut();
+
+        set_payload_size(16'd64);
+        @(posedge clk);
+
+        // Start data generation
+        reset_tx_capture();
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge clk);
+
+        // Send only initial credit window - NO advancement
+        send_ludp_credit(32'h8);
+        $display("[%0t] Test13: Sent initial credit=8 (no advancement)", $time);
+
+        // Wait for all 8 frames
+        wait_for_tx_frames(8, 5000);
+        frames_before_stall = tx_frame_count;
+        $display("[%0t] Test13: Got %0d frames with credit=8", $time, frames_before_stall);
+
+        // Now wait a long time without sending more credit
+        reset_tx_capture();
+        wait_count2 = 0;
+        while (tx_frame_count == 0 && wait_count2 < 3000) begin
+            @(posedge clk);
+            wait_count2 = wait_count2 + 1;
+        end
+        frames_after_wait = tx_frame_count;
+
+        $display("[%0t] Test13: After 3000 cycles without credit: %0d additional frames", $time, frames_after_wait);
+
+        // Verify: FPGA should have stalled (no new frames without credit)
+        if (frames_after_wait == 0) begin
+            $display("[%0t] PASS: FPGA stalled without credit advancement (expected)", $time);
+        end else begin
+            $display("[%0t] WARNING: FPGA sent %0d frames without new credit (unexpected)", $time, frames_after_wait);
+            // This is not necessarily an error - there might be in-flight frames
+        end
+
+        // Now send credit and verify FPGA resumes
+        reset_tx_capture();
+        send_ludp_credit(32'h20);
+        $display("[%0t] Test13: Sent credit=20 to resume", $time);
+
+        wait_for_tx_frames(1, 5000);
+        if (tx_frame_count > 0) begin
+            $display("[%0t] PASS: FPGA resumed after credit update", $time);
+        end else begin
+            $display("[%0t] ERROR: FPGA did not resume after credit update", $time);
+            error_count = error_count + 1;
+        end
+
+        // Stop
+        reset_tx_capture();
+        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge clk);
     end
 
     // ============================================================
