@@ -55,8 +55,8 @@ CMD_WRITE_REG = 0x0011
 LUDP_HDR_LEN = 16  # bytes
 
 # Default window size for credit-based flow control
-DEFAULT_WINDOW_SIZE = 1024  # packets
-DEFAULT_CREDIT_INTERVAL = 64  # Send credit update every N packets received
+DEFAULT_WINDOW_SIZE = 256  # packets (smaller window = less burst = fewer drops)
+DEFAULT_CREDIT_INTERVAL = 8  # Send credit update every N in-order packets
 
 
 # ============================================================================
@@ -426,11 +426,13 @@ class LudpHost:
                 self._deliver(self.out_of_order.pop(seq))
                 self.expected_seq += 1
 
-            # Send credit update based on in-order progress
+            # Send credit update frequently to keep FPGA pipeline full
+            # but not so fast that we flood it with small credit packets
             if self.expected_seq % self.credit_interval == 0:
                 new_credit = self.expected_seq + self.window_size
-                self.send_credit(new_credit)
-                self.abs_credit = new_credit
+                if new_credit > self.abs_credit:
+                    self.send_credit(new_credit)
+                    self.abs_credit = new_credit
 
         # Future packet (gap detected)
         elif pkt.seq_num > self.expected_seq:
