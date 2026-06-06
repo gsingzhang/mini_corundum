@@ -208,7 +208,7 @@ static void process_data_packet(const uint8_t *data, int len, FILE *out_fp) {
         if (out_fp && payload_len > 0) {
             fwrite(data + LUDP_HDR_LEN, 1, payload_len, out_fp);
         }
-        uint32_t new_credit = highest_seq + 1 + window_size;
+        uint32_t new_credit = expected_seq + window_size;
         if (new_credit > abs_credit) send_credit(new_credit);
     }
 }
@@ -284,7 +284,7 @@ int main(int argc, char *argv[]) {
         if (now - start_time >= (uint64_t)duration * 1000) break;
 
         if (now - last_credit_time >= 5) {
-            uint32_t new_credit = highest_seq + 1 + window_size;
+            uint32_t new_credit = expected_seq + window_size;
             if (new_credit > abs_credit) send_credit(new_credit);
             last_credit_time = now;
         }
