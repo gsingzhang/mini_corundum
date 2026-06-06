@@ -38,9 +38,8 @@ typedef int socklen_t;
 #define LUDP_HDR_LEN    16
 #define MAX_PKT_SIZE    65536
 #define DEFAULT_PORT    1234
-#define DEFAULT_WINDOW  1024
+#define DEFAULT_WINDOW  2048
 #define DEFAULT_DURATION 10
-#define CREDIT_INTERVAL 8
 #define CMD_TIMEOUT_MS  500
 #define CMD_RETRIES     5
 
@@ -131,12 +130,12 @@ static int wait_for_cmd_ack(uint32_t cmd_id, int timeout_ms) {
 #ifdef _WIN32
             int err = WSAGetLastError();
             if (err == WSAEWOULDBLOCK) {
-                Sleep(1);
+                SwitchToThread();
                 continue;
             }
 #else
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                usleep(1000);
+                usleep(100);
                 continue;
             }
 #endif
@@ -182,7 +181,7 @@ static void set_nonblocking(int fd) {
 #endif
 }
 
-static void process_data_packet(const uint8_t *data, int len, FILE *out_fp) {
+static inline void process_data_packet(const uint8_t *data, int len, FILE *out_fp) {
     if (len < LUDP_HDR_LEN) return;
 
     uint16_t magic = data[0] | (data[1] << 8);
@@ -206,11 +205,6 @@ static void process_data_packet(const uint8_t *data, int len, FILE *out_fp) {
             fwrite(data + LUDP_HDR_LEN, 1, payload_len, out_fp);
         }
         expected_seq++;
-
-        if (expected_seq % CREDIT_INTERVAL == 0) {
-            uint32_t new_credit = expected_seq + window_size;
-            if (new_credit > abs_credit) send_credit(new_credit);
-        }
     } else if (seq > expected_seq) {
         stats.packets_out_of_order++;
         stats.gap_count += seq - expected_seq;
@@ -219,8 +213,6 @@ static void process_data_packet(const uint8_t *data, int len, FILE *out_fp) {
         if (out_fp && payload_len > 0) {
             fwrite(data + LUDP_HDR_LEN, 1, payload_len, out_fp);
         }
-        uint32_t new_credit = expected_seq + window_size;
-        if (new_credit > abs_credit) send_credit(new_credit);
     }
 }
 
@@ -230,7 +222,6 @@ int main(int argc, char *argv[]) {
     int duration = DEFAULT_DURATION;
     char *output_file = NULL;
     int debug = 0;
-    int no_write = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--fpga-ip") == 0 && i + 1 < argc) fpga_ip = argv[++i];
@@ -238,7 +229,6 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) output_file = argv[++i];
         else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) duration = atoi(argv[++i]);
         else if (strcmp(argv[i], "--debug") == 0) debug = 1;
-        else if (strcmp(argv[i], "--no-write") == 0) no_write = 1;
         else if (strcmp(argv[i], "--window") == 0 && i + 1 < argc) window_size = atoi(argv[++i]);
         else { printf("Unknown option: %s\n", argv[i]); return 1; }
     }
@@ -276,36 +266,38 @@ int main(int argc, char *argv[]) {
 
     set_nonblocking(sock_fd);
 
-    printf("[APP] %s\n", no_write ? "Receive-only mode (no file output)" :
-           (output_file ? "Writing raw payload data" : "Receive-only mode (use -o to save)"));
-    printf("[LUDP] Host started. FPGA=%s:%d\n", fpga_ip, DEFAULT_PORT);
+    printf("[APP] %s\n", output_file ? "Writing raw payload data" :
+           "Receive-only mode (use -o <file> to save)");
+    printf("[LUDP] Host started. FPGA=%s:%d window=%u\n", fpga_ip, DEFAULT_PORT, window_size);
 
     FILE *out_fp = NULL;
-    if (!no_write && output_file) {
+    if (output_file) {
         out_fp = fopen(output_file, "wb");
         if (!out_fp) { perror("fopen"); return 1; }
     }
 
     if (!send_cmd_wait_ack(CMD_START, "START")) {
         printf("[APP] Failed to start acquisition. Exiting.\n");
-        fclose(out_fp);
+        if (out_fp) fclose(out_fp);
         return 1;
     }
 
     abs_credit = window_size;
     send_credit(abs_credit);
 
+    uint8_t credit_pkt[16];
+    build_credit(credit_pkt, 0);
+
     uint64_t start_time = get_time_ms();
     uint64_t last_stats_time = start_time;
-    uint64_t last_credit_time = start_time;
-    int idle_count = 0;
+    uint32_t last_credit_seq = 0;
 
     while (running) {
         uint64_t now = get_time_ms();
         if (now - start_time >= (uint64_t)duration * 1000) break;
 
         int got_data = 0;
-        for (int b = 0; b < 256; b++) {
+        for (int b = 0; b < 1024; b++) {
             uint8_t buf[MAX_PKT_SIZE];
             struct sockaddr_in from_addr;
             socklen_t from_len = sizeof(from_addr);
@@ -337,38 +329,38 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        now = get_time_ms();
-
-        if (now - last_credit_time >= 1) {
+        if (expected_seq != last_credit_seq) {
             uint32_t new_credit = expected_seq + window_size;
-            if (new_credit > abs_credit) send_credit(new_credit);
-            last_credit_time = now;
+            if (new_credit > abs_credit) {
+                build_credit(credit_pkt, new_credit);
+                sendto(sock_fd, (const char *)credit_pkt, 16, 0,
+                       (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
+                abs_credit = new_credit;
+                last_credit_seq = expected_seq;
+            }
         }
 
         if (!got_data) {
-            idle_count++;
-            if (idle_count > 100) {
 #ifdef _WIN32
-                Sleep(1);
+            SwitchToThread();
 #else
-                usleep(1000);
+            sched_yield();
 #endif
-                idle_count = 0;
-            }
-        } else {
-            idle_count = 0;
         }
 
+        now = get_time_ms();
         if (now - last_stats_time >= 1000) {
             double elapsed = (now - start_time) / 1000.0;
             double mbps = stats.bytes_received * 8.0 / (elapsed * 1e6);
             double kpps = stats.packets_received / (elapsed * 1000.0);
-            printf("[STATS] rx=" PRIu64_FMT " proc=" PRIu64_FMT " ooo=" PRIu64_FMT " gaps=" PRIu64_FMT " %.1f Mbps %.1f kpps\n",
+            double ooo_pct = stats.packets_received > 0 ?
+                100.0 * stats.packets_out_of_order / stats.packets_received : 0;
+            printf("[STATS] rx=" PRIu64_FMT " proc=" PRIu64_FMT " ooo=%.1f%% gaps=" PRIu64_FMT " %.1f Mbps %.1f kpps credit=%u\n",
                    (unsigned long long)stats.packets_received,
                    (unsigned long long)stats.packets_processed,
-                   (unsigned long long)stats.packets_out_of_order,
+                   ooo_pct,
                    (unsigned long long)stats.gap_count,
-                   mbps, kpps);
+                   mbps, kpps, abs_credit);
             last_stats_time = now;
         }
     }
@@ -387,8 +379,11 @@ int main(int argc, char *argv[]) {
            (unsigned long long)stats.gap_count,
            mbps, kpps, elapsed);
 
-    fflush(out_fp);
-    if (out_fp) fclose(out_fp);
+    if (out_fp) {
+        fflush(out_fp);
+        fclose(out_fp);
+        printf("[APP] Data saved to %s\n", output_file);
+    }
 
 #ifdef _WIN32
     closesocket(sock_fd);
@@ -398,6 +393,5 @@ int main(int argc, char *argv[]) {
 #endif
 
     printf("[LUDP] Host stopped.\n");
-    printf("[APP] Data saved to %s\n", output_file ? output_file : "N/A");
     return 0;
 }
