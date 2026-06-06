@@ -353,6 +353,35 @@ class LudpHost:
         self.sock.close()
         print("[LUDP] Host stopped.")
 
+    def drain_socket(self, timeout: float = 0.5) -> None:
+        """Drain any pending data from the socket receive buffer."""
+        self.sock.settimeout(timeout)
+        drained = 0
+        try:
+            while True:
+                data, addr = self.sock.recvfrom(65535)
+                drained += 1
+        except socket.timeout:
+            pass
+        except OSError:
+            pass
+        finally:
+            self.sock.settimeout(None)
+        if drained > 0 and self.debug:
+            print(f"[DEBUG] Drained {drained} packets from socket buffer")
+
+    def reset_state(self) -> None:
+        """Reset host state for a new acquisition run."""
+        self.expected_seq = 0
+        self.abs_credit = self.window_size
+        self.highest_seq = 0
+        self.out_of_order.clear()
+        self.ooo_heap.clear()
+        self.pending_nacks.clear()
+        self.pending_cmds.clear()
+        self.next_cmd_id = 1
+        self.stats = LudpStats()
+
     def _recv_loop(self) -> None:
         """Main receive loop running in a dedicated thread."""
         while self.running:
@@ -635,6 +664,10 @@ def run_logger(args):
     )
 
     host.start()
+
+    # Drain any stale packets from previous run and reset state
+    host.drain_socket(timeout=0.5)
+    host.reset_state()
 
     # Send START command
     if not host.send_start():

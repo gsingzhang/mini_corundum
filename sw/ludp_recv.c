@@ -123,24 +123,24 @@ static int wait_for_cmd_ack(uint32_t cmd_id, int timeout_ms) {
     socklen_t from_len = sizeof(from_addr);
     uint64_t deadline = get_time_ms() + timeout_ms;
 
+    // Temporarily set blocking with timeout for reliable ACK reception
+#ifdef _WIN32
+    u_long mode = 0;
+    ioctlsocket(sock_fd, FIONBIO, &mode);
+    DWORD tv = (DWORD)timeout_ms;
+    setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+#else
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    setsockopt(sock_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
+
     while (get_time_ms() < deadline) {
         int n = recvfrom(sock_fd, (char *)buf, MAX_PKT_SIZE, 0,
                          (struct sockaddr *)&from_addr, &from_len);
-        if (n < 0) {
-#ifdef _WIN32
-            int err = WSAGetLastError();
-            if (err == WSAEWOULDBLOCK) {
-                SwitchToThread();
-                continue;
-            }
-#else
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                usleep(100);
-                continue;
-            }
-#endif
-            continue;
-        }
+        if (n < 0) break;  // timeout or error
+
         if (n < LUDP_HDR_LEN) continue;
 
         uint16_t magic = buf[0] | (buf[1] << 8);
@@ -149,9 +149,28 @@ static int wait_for_cmd_ack(uint32_t cmd_id, int timeout_ms) {
         uint8_t pkt_type = buf[2];
         if (pkt_type == PKT_CMD_ACK || pkt_type == PKT_CMD_CPL) {
             uint32_t rx_cmd_id = buf[4] | (buf[5] << 8) | (buf[6] << 16) | (buf[7] << 24);
-            if (rx_cmd_id == cmd_id) return 1;
+            if (rx_cmd_id == cmd_id) {
+                // Restore non-blocking mode
+#ifdef _WIN32
+                mode = 1;
+                ioctlsocket(sock_fd, FIONBIO, &mode);
+#else
+                int flags = fcntl(sock_fd, F_GETFL, 0);
+                fcntl(sock_fd, F_SETFL, flags | O_NONBLOCK);
+#endif
+                return 1;
+            }
         }
     }
+
+    // Restore non-blocking mode
+#ifdef _WIN32
+    mode = 1;
+    ioctlsocket(sock_fd, FIONBIO, &mode);
+#else
+    int flags = fcntl(sock_fd, F_GETFL, 0);
+    fcntl(sock_fd, F_SETFL, flags | O_NONBLOCK);
+#endif
     return 0;
 }
 
@@ -265,6 +284,28 @@ int main(int argc, char *argv[]) {
 #endif
 
     set_nonblocking(sock_fd);
+
+    // Drain any stale packets from previous run
+    {
+        int drained = 0;
+        uint8_t drain_buf[MAX_PKT_SIZE];
+        struct sockaddr_in drain_addr;
+        socklen_t drain_len = sizeof(drain_addr);
+        for (int i = 0; i < 10000; i++) {
+            int n = recvfrom(sock_fd, (char *)drain_buf, MAX_PKT_SIZE, 0,
+                             (struct sockaddr *)&drain_addr, &drain_len);
+            if (n < 0) break;
+            drained++;
+        }
+        if (drained > 0) printf("[APP] Drained %d stale packets\n", drained);
+    }
+
+    // Reset state for fresh start
+    expected_seq = 0;
+    abs_credit = window_size;
+    highest_seq = 0;
+    memset(&stats, 0, sizeof(stats));
+    next_cmd_id = 1;
 
     printf("[APP] %s\n", output_file ? "Writing raw payload data" :
            "Receive-only mode (use -o <file> to save)");

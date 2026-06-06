@@ -37,12 +37,13 @@ typedef int socklen_t;
 #define CMD_STOP        0x0002
 
 #define LUDP_HDR_LEN    16
+#define MAX_PKT_SIZE    65536
 #define DEFAULT_PORT    1234
-#define DEFAULT_WINDOW  4096
+#define DEFAULT_WINDOW  2048
 #define DEFAULT_DURATION 10
 #define CMD_TIMEOUT_MS  500
 #define CMD_RETRIES     5
-#define CREDIT_EVERY    64
+#define CREDIT_INTERVAL 8
 
 #define ETH_HDR_LEN     14
 #define IP_HDR_LEN      20
@@ -54,6 +55,7 @@ typedef struct {
     uint64_t packets_out_of_order;
     uint64_t bytes_received;
     uint64_t gap_count;
+    uint64_t gap_events;
     uint32_t last_seq;
 } stats_t;
 
@@ -61,15 +63,15 @@ static int ctrl_sock = -1;
 static struct sockaddr_in fpga_addr;
 static uint32_t expected_seq = 0;
 static uint32_t abs_credit = DEFAULT_WINDOW;
-static uint32_t highest_seq = 0;
+static uint32_t highest_rx_seq = 0;
 static uint32_t window_size = DEFAULT_WINDOW;
-static stats_t stats = {0};
+static stats_t stats;
 static int running = 1;
 static uint32_t next_cmd_id = 1;
 static uint8_t credit_pkt[16];
-static uint32_t credit_seq_tracker = 0;
-static int credit_counter = 0;
+static uint32_t credit_counter = 0;
 static uint16_t target_port = DEFAULT_PORT;
+static uint16_t ctrl_src_port = 0;
 
 static uint64_t get_time_ms(void) {
 #ifdef _WIN32
@@ -125,72 +127,60 @@ static void send_credit(uint32_t credit) {
     abs_credit = credit;
 }
 
-static inline void try_send_credit(void) {
-    if (expected_seq > credit_seq_tracker) {
-        uint32_t new_credit = expected_seq + window_size;
-        if (new_credit > abs_credit) {
-            build_credit(credit_pkt, new_credit);
-            sendto(ctrl_sock, (const char *)credit_pkt, 16, 0,
-                   (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
-            abs_credit = new_credit;
-        }
-        credit_seq_tracker = expected_seq;
+static void update_credit(void) {
+    uint32_t credit_base = highest_rx_seq > expected_seq ? highest_rx_seq : expected_seq;
+    uint32_t new_credit = credit_base + window_size;
+    if (new_credit > abs_credit) {
+        send_credit(new_credit);
     }
 }
 
-static int wait_for_cmd_ack(uint32_t cmd_id, int timeout_ms, pcap_t *pcap) {
+static int wait_for_cmd_ack(uint32_t cmd_id, int timeout_ms) {
+    uint8_t buf[MAX_PKT_SIZE];
+    struct sockaddr_in from_addr;
+    socklen_t from_len = sizeof(from_addr);
     uint64_t deadline = get_time_ms() + timeout_ms;
 
     while (get_time_ms() < deadline) {
-        struct pcap_pkthdr *hdr;
-        const u_char *data;
-        int res = pcap_next_ex(pcap, &hdr, &data);
-        if (res <= 0) {
+        int n = recvfrom(ctrl_sock, (char *)buf, MAX_PKT_SIZE, 0,
+                         (struct sockaddr *)&from_addr, &from_len);
+        if (n < 0) {
 #ifdef _WIN32
-            SwitchToThread();
+            int err = WSAGetLastError();
+            if (err == WSAEWOULDBLOCK) {
+                SwitchToThread();
+                continue;
+            }
 #else
-            usleep(100);
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                usleep(100);
+                continue;
+            }
 #endif
             continue;
         }
+        if (n < LUDP_HDR_LEN) continue;
 
-        int caplen = hdr->caplen;
-        if (caplen < ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN + LUDP_HDR_LEN) continue;
-
-        int ip_hdr_off = ETH_HDR_LEN;
-        if ((data[ip_hdr_off] & 0xF0) != 0x40) continue;
-
-        int ip_hdr_len = (data[ip_hdr_off] & 0x0F) * 4;
-        if (ip_hdr_len < IP_HDR_LEN) continue;
-
-        int udp_off = ETH_HDR_LEN + ip_hdr_len;
-        if (caplen < udp_off + UDP_HDR_LEN + LUDP_HDR_LEN) continue;
-
-        uint16_t dst_port = (data[udp_off + 2] << 8) | data[udp_off + 3];
-        if (dst_port != target_port) continue;
-
-        int ludp_off = udp_off + UDP_HDR_LEN;
-        uint16_t magic = data[ludp_off] | (data[ludp_off + 1] << 8);
+        uint16_t magic = buf[0] | (buf[1] << 8);
         if (magic != LUDP_MAGIC) continue;
 
-        uint8_t pkt_type = data[ludp_off + 2];
+        uint8_t pkt_type = buf[2];
         if (pkt_type == PKT_CMD_ACK || pkt_type == PKT_CMD_CPL) {
-            uint32_t rx_cmd_id = data[ludp_off + 4] | (data[ludp_off + 5] << 8) |
-                                 (data[ludp_off + 6] << 16) | (data[ludp_off + 7] << 24);
+            uint32_t rx_cmd_id = buf[4] | (buf[5] << 8) | (buf[6] << 16) | (buf[7] << 24);
             if (rx_cmd_id == cmd_id) return 1;
         }
     }
     return 0;
 }
 
-static int send_cmd_wait_ack(uint16_t opcode, const char *name, pcap_t *pcap) {
+static int send_cmd_wait_ack(uint16_t opcode, const char *name) {
     for (int attempt = 0; attempt < CMD_RETRIES; attempt++) {
         uint32_t cmd_id = next_cmd_id++;
         uint8_t pkt[16];
         build_cmd(pkt, opcode, 0, 0, 0, cmd_id);
         send_to_fpga(pkt, 16);
 
-        if (wait_for_cmd_ack(cmd_id, CMD_TIMEOUT_MS, pcap)) {
+        if (wait_for_cmd_ack(cmd_id, CMD_TIMEOUT_MS)) {
             printf("[OK] %s command acknowledged\n", name);
             return 1;
         }
@@ -214,7 +204,7 @@ static void pcap_handler_cb(u_char *user, const struct pcap_pkthdr *hdr,
     if (caplen < udp_off + UDP_HDR_LEN + LUDP_HDR_LEN) return;
 
     uint16_t dst_port = (data[udp_off + 2] << 8) | data[udp_off + 3];
-    if (dst_port != target_port) return;
+    if (dst_port != target_port && dst_port != ctrl_src_port) return;
 
     int ludp_off = udp_off + UDP_HDR_LEN;
     uint16_t magic = data[ludp_off] | (data[ludp_off + 1] << 8);
@@ -224,28 +214,29 @@ static void pcap_handler_cb(u_char *user, const struct pcap_pkthdr *hdr,
 
     if (pkt_type == PKT_DATA) {
         uint32_t seq = data[ludp_off + 4] | (data[ludp_off + 5] << 8) |
-                       (data[ludp_off + 6] << 16) | (data[ludp_off + 7] << 24);
-        uint16_t payload_len = data[ludp_off + 8] | (data[ludp_off + 9] << 8);
+                       data[ludp_off + 6] << 16 | data[ludp_off + 7] << 24;
 
         stats.packets_received++;
         stats.bytes_received += caplen;
         stats.last_seq = seq;
-        if (seq > highest_seq) highest_seq = seq;
+        if (seq > highest_rx_seq) highest_rx_seq = seq;
 
         if (seq == expected_seq) {
             stats.packets_processed++;
             expected_seq++;
             credit_counter++;
         } else if (seq > expected_seq) {
+            uint32_t gap = seq - expected_seq;
             stats.packets_out_of_order++;
-            stats.gap_count += seq - expected_seq;
-            expected_seq = seq + 1;
+            stats.gap_count += gap;
+            stats.gap_events++;
             stats.packets_processed++;
+            expected_seq = seq + 1;
             credit_counter++;
         }
 
-        if (credit_counter >= CREDIT_EVERY) {
-            try_send_credit();
+        if (credit_counter >= CREDIT_INTERVAL) {
+            update_credit();
             credit_counter = 0;
         }
     }
@@ -253,20 +244,18 @@ static void pcap_handler_cb(u_char *user, const struct pcap_pkthdr *hdr,
 
 int main(int argc, char *argv[]) {
     char *fpga_ip = "192.168.1.128";
+    char *local_ip = NULL;
     int port = DEFAULT_PORT;
     int duration = DEFAULT_DURATION;
-    char *output_file = NULL;
     char *iface_name = NULL;
-    int debug = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--fpga-ip") == 0 && i + 1 < argc) fpga_ip = argv[++i];
         else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) port = atoi(argv[++i]);
-        else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) output_file = argv[++i];
         else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) duration = atoi(argv[++i]);
-        else if (strcmp(argv[i], "--debug") == 0) debug = 1;
         else if (strcmp(argv[i], "--window") == 0 && i + 1 < argc) window_size = atoi(argv[++i]);
         else if (strcmp(argv[i], "--iface") == 0 && i + 1 < argc) iface_name = argv[++i];
+        else if (strcmp(argv[i], "--local-ip") == 0 && i + 1 < argc) local_ip = argv[++i];
         else { printf("Unknown option: %s\n", argv[i]); return 1; }
     }
 
@@ -277,11 +266,38 @@ int main(int argc, char *argv[]) {
     WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
 
+    memset(&stats, 0, sizeof(stats));
+
     ctrl_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (ctrl_sock < 0) { perror("socket"); return 1; }
 
     int sndbuf = 16 * 1024 * 1024;
     setsockopt(ctrl_sock, SOL_SOCKET, SO_SNDBUF, (const char *)&sndbuf, sizeof(sndbuf));
+
+    struct sockaddr_in ctrl_local;
+    memset(&ctrl_local, 0, sizeof(ctrl_local));
+    ctrl_local.sin_family = AF_INET;
+    if (local_ip) {
+        ctrl_local.sin_addr.s_addr = inet_addr(local_ip);
+    } else {
+        ctrl_local.sin_addr.s_addr = INADDR_ANY;
+    }
+    ctrl_local.sin_port = 0;
+    if (bind(ctrl_sock, (struct sockaddr *)&ctrl_local, sizeof(ctrl_local)) < 0) {
+        perror("bind ctrl_sock"); return 1;
+    }
+
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(ctrl_sock, FIONBIO, &mode);
+#else
+    fcntl(ctrl_sock, F_SETFL, fcntl(ctrl_sock, F_GETFL, 0) | O_NONBLOCK);
+#endif
+
+    socklen_t ctrl_local_len = sizeof(ctrl_local);
+    getsockname(ctrl_sock, (struct sockaddr *)&ctrl_local, &ctrl_local_len);
+    ctrl_src_port = ntohs(ctrl_local.sin_port);
+    printf("[CTRL] Source port: %u\n", ctrl_src_port);
 
     memset(&fpga_addr, 0, sizeof(fpga_addr));
     fpga_addr.sin_family = AF_INET;
@@ -328,7 +344,8 @@ int main(int argc, char *argv[]) {
     pcap_setnonblock(pcap, 1, errbuf);
 
     char filter[256];
-    snprintf(filter, sizeof(filter), "udp dst port %d", port);
+    snprintf(filter, sizeof(filter), "udp and (dst port %d or dst port %u)", port, ctrl_src_port);
+    printf("[PCAP] Using filter: %s\n", filter);
     struct bpf_program fp;
     if (pcap_compile(pcap, &fp, filter, 0, 0xFFFFFF00) == -1) {
         fprintf(stderr, "Bad filter: %s\n", pcap_geterr(pcap));
@@ -348,7 +365,15 @@ int main(int argc, char *argv[]) {
     printf("[APP] Npcap kernel-bypass receiver\n");
     printf("[LUDP] Host started. FPGA=%s:%d window=%u\n", fpga_ip, DEFAULT_PORT, window_size);
 
-    if (!send_cmd_wait_ack(CMD_START, "START", pcap)) {
+    send_cmd_wait_ack(CMD_STOP, "STOP(reset)");
+
+    expected_seq = 0;
+    abs_credit = 0;
+    highest_rx_seq = 0;
+    credit_counter = 0;
+    memset(&stats, 0, sizeof(stats));
+
+    if (!send_cmd_wait_ack(CMD_START, "START")) {
         printf("[APP] Failed to start acquisition. Exiting.\n");
         pcap_close(pcap);
         return 1;
@@ -356,7 +381,6 @@ int main(int argc, char *argv[]) {
 
     abs_credit = window_size;
     send_credit(abs_credit);
-    credit_seq_tracker = 0;
 
     uint64_t start_time = get_time_ms();
     uint64_t last_stats_time = start_time;
@@ -367,7 +391,7 @@ int main(int argc, char *argv[]) {
 
         int cnt = pcap_dispatch(pcap, 4096, pcap_handler_cb, NULL);
         if (cnt <= 0) {
-            try_send_credit();
+            update_credit();
 #ifdef _WIN32
             SwitchToThread();
 #else
@@ -382,28 +406,35 @@ int main(int argc, char *argv[]) {
             double kpps = stats.packets_received / (elapsed * 1000.0);
             double ooo_pct = stats.packets_received > 0 ?
                 100.0 * stats.packets_out_of_order / stats.packets_received : 0;
-            printf("[STATS] rx=" PRIu64_FMT " proc=" PRIu64_FMT " ooo=%.1f%% gaps=" PRIu64_FMT " %.1f Mbps %.1f kpps\n",
+            printf("[STATS] rx=" PRIu64_FMT " proc=" PRIu64_FMT
+                   " ooo=" PRIu64_FMT "(%.1f%%)"
+                   " gaps=" PRIu64_FMT "/" PRIu64_FMT
+                   " %.1f Mbps %.1f kpps\n",
                    (unsigned long long)stats.packets_received,
                    (unsigned long long)stats.packets_processed,
-                   ooo_pct,
+                   (unsigned long long)stats.packets_out_of_order, ooo_pct,
                    (unsigned long long)stats.gap_count,
+                   (unsigned long long)stats.gap_events,
                    mbps, kpps);
             last_stats_time = now;
         }
     }
 
-    send_cmd_wait_ack(CMD_STOP, "STOP", pcap);
+    send_cmd_wait_ack(CMD_STOP, "STOP");
 
     double elapsed = (get_time_ms() - start_time) / 1000.0;
     double mbps = stats.bytes_received * 8.0 / (elapsed * 1e6);
     double kpps = stats.packets_received / (elapsed * 1000.0);
     double ooo_pct = stats.packets_received > 0 ?
         100.0 * stats.packets_out_of_order / stats.packets_received : 0;
-    printf("[APP] Stats: " PRIu64_FMT " processed, " PRIu64_FMT " OOO (%.1f%%), " PRIu64_FMT " gaps, %.1f Mbps, %.1f kpps, elapsed=%.1fs\n",
+    printf("[APP] Stats: " PRIu64_FMT " processed, "
+           PRIu64_FMT " OOO (%.1f%%), "
+           PRIu64_FMT " gaps in " PRIu64_FMT " events, "
+           "%.1f Mbps, %.1f kpps, elapsed=%.1fs\n",
            (unsigned long long)stats.packets_processed,
-           (unsigned long long)stats.packets_out_of_order,
-           ooo_pct,
+           (unsigned long long)stats.packets_out_of_order, ooo_pct,
            (unsigned long long)stats.gap_count,
+           (unsigned long long)stats.gap_events,
            mbps, kpps, elapsed);
 
     pcap_close(pcap);
@@ -418,3 +449,4 @@ int main(int argc, char *argv[]) {
     printf("[LUDP] Host stopped.\n");
     return 0;
 }
+
