@@ -1,4 +1,10 @@
+../rtl/taxi_axis_if.sv
+../rtl/taxi_axis_arb_mux.sv
+../rtl/taxi_arbiter.sv
+../rtl/taxi_penc.sv
 ../rtl/ludp_protocol.sv
+../rtl/ludp_protocol_rx.sv
+../rtl/ludp_protocol_tx.sv
 ../rtl/icmp_echo_reply.sv
 ../rtl/fpga_core.v
 ../lib/eth/rtl/eth_mac_10g_fifo.v
@@ -39,4 +45,5 @@
 ../lib/eth/lib/axis/rtl/axis_async_fifo.v
 ../lib/eth/lib/axis/rtl/axis_async_fifo_adapter.v
 ../lib/eth/lib/axis/rtl/sync_reset.v
+../lib/eth/lib/axis/rtl/axis_arb_mux.v
 tb_fpga_core.v
