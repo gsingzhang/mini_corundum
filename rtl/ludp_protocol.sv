@@ -167,6 +167,8 @@ module ludp_protocol #(
         STATE_TX_RESP    // Transmit response packet
     } state_t;
 
+    localparam int TX_BURST_LIMIT = 64;
+
     // FSM state registers
     state_t state_reg, state_next;
 
@@ -177,6 +179,7 @@ module ludp_protocol #(
     logic [31:0] cmd_count_reg;     // Total commands received
     logic [31:0] packets_sent_reg;  // Total data packets sent
     logic [31:0] packets_retx_reg;  // Total retransmissions
+    logic [3:0]  tx_burst_count_reg;
 
     // RX packet field registers (captured during STATE_RX_CMD)
     logic [15:0] rx_magic_reg;
@@ -260,29 +263,41 @@ module ludp_protocol #(
     assign cmd_valid   = cmd_valid_reg;
     assign status_ready = 1'b1;
 
+    // RX acceptance control: only accept RX headers when committed to processing
+    // This prevents accepting a header and then abandoning the payload
+    wire idle_accept_rx = !rx_pkt_valid_reg && (
+                          !(tx_data_axis_tvalid && can_send) ||
+                          tx_burst_count_reg >= TX_BURST_LIMIT);
+
+    // RX interface handshaking
+    assign rx_udp_hdr_ready = (state_reg == STATE_RX_CMD) ||
+                              (state_reg == STATE_IDLE && idle_accept_rx);
+    assign rx_udp_payload_axis_tready = (state_reg == STATE_RX_CMD);
+
     // Main FSM next-state logic
     always_comb begin
         state_next = state_reg;
 
         case (state_reg)
             STATE_IDLE: begin
-                // Priority: RX command > TX data > TX response
-                // Data has higher priority than responses to maximize throughput.
-                // CMD_ACK/CPL responses can be delayed a few cycles without issue
-                // since the host uses timeout-based retry.
-                if (rx_udp_hdr_valid && rx_udp_hdr_ready) begin
+                if (rx_pkt_valid_reg) begin
+                    state_next = STATE_IDLE;
+                end else if (tx_burst_count_reg >= TX_BURST_LIMIT && rx_udp_hdr_valid) begin
                     state_next = STATE_RX_CMD;
                 end else if (tx_data_axis_tvalid && can_send) begin
                     state_next = STATE_TX_HEADER;
                 end else if (resp_valid_reg) begin
                     state_next = STATE_TX_RESP;
+                end else if (rx_udp_hdr_valid) begin
+                    state_next = STATE_RX_CMD;
                 end
             end
 
             STATE_RX_CMD: begin
-                // Return to IDLE when last payload beat received
-                if (rx_udp_payload_axis_tvalid && rx_udp_payload_axis_tready && rx_udp_payload_axis_tlast)
-                    state_next = STATE_IDLE;
+                if (rx_udp_payload_axis_tvalid && rx_udp_payload_axis_tready) begin
+                    if (rx_udp_payload_axis_tlast || rx_udp_payload_axis_tuser)
+                        state_next = STATE_IDLE;
+                end
             end
 
             STATE_TX_HEADER: begin
@@ -306,10 +321,6 @@ module ludp_protocol #(
             default: state_next = STATE_IDLE;
         endcase
     end
-
-    // RX interface handshaking
-    assign rx_udp_hdr_ready = (state_reg == STATE_IDLE) || (state_reg == STATE_RX_CMD);
-    assign rx_udp_payload_axis_tready = (state_reg == STATE_RX_CMD) || (state_reg == STATE_IDLE);
 
     // TX UDP header valid signal
     always_comb begin
@@ -412,6 +423,7 @@ module ludp_protocol #(
             cmd_count_reg           <= 0;
             packets_sent_reg        <= 0;
             packets_retx_reg        <= 0;
+            tx_burst_count_reg      <= 0;
             rx_magic_reg            <= 0;
             rx_type_reg             <= 0;
             rx_flags_reg            <= 0;
@@ -457,25 +469,22 @@ module ludp_protocol #(
 
             case (state_reg)
                 STATE_IDLE: begin
-                // Clear TX control flags
-                tx_hdr_sent_reg           <= 0;
-                tx_beat_count_reg         <= 0;
-                tx_payload_bytes_sent_reg <= 0;
+                    tx_hdr_sent_reg           <= 0;
+                    tx_beat_count_reg         <= 0;
+                    tx_payload_bytes_sent_reg <= 0;
 
-                if (rx_pkt_valid_reg) begin
-                    // Process packet received in previous RX_CMD state
-                    rx_pkt_valid_reg <= 1'b0;
-                    if (rx_pkt_magic_reg == MAGIC) begin
+                    if (rx_pkt_valid_reg) begin
+                        rx_pkt_valid_reg <= 1'b0;
+                        tx_burst_count_reg <= 0;
+                        if (rx_pkt_magic_reg == MAGIC) begin
                             case (rx_pkt_type_reg)
                                 TYPE_CMD: begin
-                                    // Decode command fields
                                     cmd_opcode_reg <= rx_pkt_opcode_reg;
                                     cmd_arg1_reg   <= rx_pkt_arg1_reg;
                                     cmd_arg2_reg   <= rx_pkt_arg2_reg;
                                     cmd_valid_reg  <= 1'b1;
                                     cmd_count_reg  <= cmd_count_reg + 1;
 
-                                    // Generate response (ACK or CPL based on flags)
                                     if (rx_pkt_flags_reg == 8'h00) begin
                                         resp_opcode_reg <= rx_pkt_opcode_reg;
                                         resp_cmd_id_reg <= rx_pkt_seq_reg;
@@ -492,65 +501,36 @@ module ludp_protocol #(
                                         resp_is_cpl_reg <= 1'b1;
                                     end
 
-                                    // Execute command
                                     case (rx_pkt_opcode_reg)
                                         CMD_START: begin
-                                            burst_active_reg <= 1'b1;
-                                            seq_num_reg      <= 0;
-                                            abs_credit_reg   <= 0;
+                                            if (!burst_active_reg) begin
+                                                burst_active_reg <= 1'b1;
+                                                seq_num_reg      <= 0;
+                                                abs_credit_reg   <= 0;
+                                            end
                                         end
                                         CMD_STOP: begin
                                             burst_active_reg <= 1'b0;
                                         end
-                                        CMD_WRITE_REG: begin
-                                            // TODO: implement register write
-                                        end
-                                        CMD_READ_REG: begin
-                                            // TODO: implement register read
-                                        end
                                         default: begin
-                                            // Unknown command
                                         end
                                     endcase
                                 end
 
                                 TYPE_NACK: begin
-                                    // Host reported missing packets
                                     packets_retx_reg <= packets_retx_reg + 1;
                                 end
 
                                 TYPE_CREDIT: begin
-                                    // Update credit limit without generating a response.
-                                    // The host does not wait for CREDIT ACK, so sending
-                                    // a response only blocks data transmission.
-                                    abs_credit_reg <= rx_pkt_seq_reg;
+                                    if ($signed(rx_pkt_seq_reg - abs_credit_reg) > 0)
+                                        abs_credit_reg <= rx_pkt_seq_reg;
                                 end
 
                                 default: begin
-                                    // Unknown packet type
                                 end
                             endcase
                         end
-                    end else if (resp_valid_reg) begin
-                        // Prepare response packet header (fixed 24-byte UDP payload)
-                        // Response has priority over new RX and data to ensure CMD_ACK/CPL
-                        // is always sent promptly. Without this, continuous CREDIT packets
-                        // from the host can starve response transmission.
-                        tx_hdr_sent_reg   <= 0;
-                        tx_beat_count_reg <= 0;
-                        tx_is_data_reg    <= 1'b0;
-                        $display("[%0t] LUDP: Preparing response opcode=%04h dest_ip=%08h dest_port=%0d", $time, resp_opcode_reg, rx_src_ip_reg, rx_src_port_reg);
-                        if (resp_is_cpl_reg) begin
-                            // Command completion response
-                            tx_header_beat0_reg <= {resp_cmd_id_reg, resp_status_reg, TYPE_CMD_CPL, MAGIC};
-                            tx_header_beat1_reg <= {16'h0000, resp_data_reg, resp_opcode_reg};
-                        end else begin
-                            // Command acknowledgment response
-                            tx_header_beat0_reg <= {resp_cmd_id_reg, resp_status_reg, TYPE_CMD_ACK, MAGIC};
-                            tx_header_beat1_reg <= {48'h0, resp_opcode_reg};
-                        end
-                    end else if (rx_udp_hdr_valid && rx_udp_hdr_ready) begin
-                        // Prepare for new RX packet - capture source address for response routing
+                    end else if (state_next == STATE_RX_CMD) begin
                         rx_magic_reg    <= 0;
                         rx_type_reg     <= 0;
                         rx_flags_reg    <= 0;
@@ -558,56 +538,64 @@ module ludp_protocol #(
                         rx_src_mac_reg  <= rx_udp_eth_src_mac;
                         rx_src_ip_reg   <= rx_udp_ip_source_ip;
                         rx_src_port_reg <= rx_udp_source_port;
-                    end else if (tx_data_axis_tvalid && can_send) begin
-                        // Prepare data packet header with variable payload
-                        // Use payload_size hint from upstream for correct UDP header
-                        tx_payload_size_reg     <= tx_data_payload_size;
+                    end else if (state_next == STATE_TX_HEADER) begin
+                        tx_payload_size_reg       <= tx_data_payload_size;
                         tx_payload_bytes_sent_reg <= 0;
-                        tx_header_beat0_reg     <= {seq_num_reg, 8'h00, TYPE_DATA, MAGIC};
-                        tx_header_beat1_reg     <= {16'h0000, 32'h0, tx_data_payload_size};
-                        tx_hdr_sent_reg         <= 0;
-                        tx_beat_count_reg       <= 0;
-                        tx_is_data_reg          <= 1'b1;
-                        $display("[%0t] LUDP: DATA TX start seq=%0d payload_size=%0d", $time, seq_num_reg, tx_data_payload_size);
+                        tx_header_beat0_reg       <= {seq_num_reg, 8'h00, TYPE_DATA, MAGIC};
+                        tx_header_beat1_reg       <= {16'h0000, 32'h0, tx_data_payload_size};
+                        tx_hdr_sent_reg           <= 0;
+                        tx_beat_count_reg         <= 0;
+                        tx_is_data_reg            <= 1'b1;
+                    end else if (state_next == STATE_TX_RESP) begin
+                        tx_hdr_sent_reg   <= 0;
+                        tx_beat_count_reg <= 0;
+                        tx_is_data_reg    <= 1'b0;
+                        if (resp_is_cpl_reg) begin
+                            tx_header_beat0_reg <= {resp_cmd_id_reg, resp_status_reg, TYPE_CMD_CPL, MAGIC};
+                            tx_header_beat1_reg <= {16'h0000, resp_data_reg, resp_opcode_reg};
+                        end else begin
+                            tx_header_beat0_reg <= {resp_cmd_id_reg, resp_status_reg, TYPE_CMD_ACK, MAGIC};
+                            tx_header_beat1_reg <= {48'h0, resp_opcode_reg};
+                        end
                     end
                 end
 
                 STATE_RX_CMD: begin
                     rx_pkt_valid_reg <= 1'b0;
                     if (rx_udp_payload_axis_tvalid && rx_udp_payload_axis_tready) begin
-                        // Parse incoming packet fields by beat
-                        case (tx_beat_count_reg)
-                            4'd0: begin
-                                // Beat 0: magic, type, flags, sequence
-                                rx_magic_reg <= rx_udp_payload_axis_tdata[15:0];
-                                rx_type_reg  <= rx_udp_payload_axis_tdata[23:16];
-                                rx_flags_reg <= rx_udp_payload_axis_tdata[31:24];
-                                rx_seq_reg   <= rx_udp_payload_axis_tdata[63:32];
-                            end
-                            4'd1: begin
-                                // Beat 1: opcode, arg1, arg2
-                                rx_opcode_reg <= rx_udp_payload_axis_tdata[15:0];
-                                rx_arg1_reg   <= rx_udp_payload_axis_tdata[47:16];
-                                rx_arg2_reg   <= rx_udp_payload_axis_tdata[63:48];
-                                rx_cmd_id_reg <= rx_seq_reg;
-                                rx_miss_seq_reg <= rx_seq_reg;
-                                rx_abs_credit_reg <= rx_seq_reg;
-                            end
-                        endcase
-                        tx_beat_count_reg <= tx_beat_count_reg + 1;
+                        if (rx_udp_payload_axis_tuser) begin
+                            tx_beat_count_reg <= 0;
+                        end else begin
+                            case (tx_beat_count_reg)
+                                4'd0: begin
+                                    rx_magic_reg <= rx_udp_payload_axis_tdata[15:0];
+                                    rx_type_reg  <= rx_udp_payload_axis_tdata[23:16];
+                                    rx_flags_reg <= rx_udp_payload_axis_tdata[31:24];
+                                    rx_seq_reg   <= rx_udp_payload_axis_tdata[63:32];
+                                end
+                                4'd1: begin
+                                    rx_opcode_reg <= rx_udp_payload_axis_tdata[15:0];
+                                    rx_arg1_reg   <= rx_udp_payload_axis_tdata[47:16];
+                                    rx_arg2_reg   <= rx_udp_payload_axis_tdata[63:48];
+                                    rx_cmd_id_reg <= rx_seq_reg;
+                                    rx_miss_seq_reg <= rx_seq_reg;
+                                    rx_abs_credit_reg <= rx_seq_reg;
+                                end
+                            endcase
+                            tx_beat_count_reg <= tx_beat_count_reg + 1;
 
-                        if (rx_udp_payload_axis_tlast) begin
-                            // Last beat: capture parsed packet for IDLE processing
-                            tx_beat_count_reg   <= 0;
-                            rx_pkt_magic_reg    <= rx_pkt_magic;
-                            rx_pkt_type_reg     <= rx_pkt_type;
-                            rx_pkt_flags_reg    <= rx_pkt_flags;
-                            rx_pkt_seq_reg      <= rx_pkt_seq;
-                            rx_pkt_opcode_reg   <= rx_pkt_opcode;
-                            rx_pkt_arg1_reg     <= rx_pkt_arg1;
-                            rx_pkt_arg2_reg     <= rx_pkt_arg2;
-                            rx_pkt_valid_reg    <= 1'b1;
-                            $display("[%0t] LUDP: RX parsed magic=%04h type=%02h opcode=%04h", $time, rx_pkt_magic, rx_pkt_type, rx_pkt_opcode);
+                            if (rx_udp_payload_axis_tlast) begin
+                                tx_beat_count_reg   <= 0;
+                                tx_burst_count_reg  <= 0;
+                                rx_pkt_magic_reg    <= rx_pkt_magic;
+                                rx_pkt_type_reg     <= rx_pkt_type;
+                                rx_pkt_flags_reg    <= rx_pkt_flags;
+                                rx_pkt_seq_reg      <= rx_pkt_seq;
+                                rx_pkt_opcode_reg   <= rx_pkt_opcode;
+                                rx_pkt_arg1_reg     <= rx_pkt_arg1;
+                                rx_pkt_arg2_reg     <= rx_pkt_arg2;
+                                rx_pkt_valid_reg    <= 1'b1;
+                            end
                         end
                     end
                 end
@@ -631,11 +619,10 @@ module ludp_protocol #(
                         // For 64-bit data: tkeep[0]=1 means byte 0 valid, etc.
                         // Simplified: assume full beats except possibly last
                         if (tx_data_axis_tlast) begin
-                            // Last beat: count actual bytes from tkeep
-                            // This is a simplified calculation - could be more precise
                             tx_payload_size_reg <= tx_payload_bytes_sent_reg + KEEP_WIDTH;
                             seq_num_reg         <= seq_num_reg + 1;
                             packets_sent_reg    <= packets_sent_reg + 1;
+                            tx_burst_count_reg  <= tx_burst_count_reg + 1;
                         end else begin
                             tx_payload_bytes_sent_reg <= tx_payload_bytes_sent_reg + KEEP_WIDTH;
                         end
@@ -668,7 +655,7 @@ module ludp_protocol #(
             state_reg <= state_next;
 
             // Handle status interface (higher priority than FSM)
-            if (status_valid && status_ready) begin
+            if (status_valid && status_ready && !resp_valid_reg) begin
                 resp_opcode_reg <= status_opcode;
                 resp_cmd_id_reg <= 32'h0;
                 resp_status_reg <= 8'h00;

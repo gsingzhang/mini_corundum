@@ -40,6 +40,8 @@ typedef int socklen_t;
 #define DEFAULT_PORT    1234
 #define DEFAULT_WINDOW  2048
 #define DEFAULT_DURATION 10
+#define STATS_INTERVAL_SEC 30
+#define CREDIT_INTERVAL 64
 #define CMD_TIMEOUT_MS  500
 #define CMD_RETRIES     5
 
@@ -61,6 +63,21 @@ static uint32_t window_size = DEFAULT_WINDOW;
 static stats_t stats = {0};
 static int running = 1;
 static uint32_t next_cmd_id = 1;
+
+#ifdef _WIN32
+static BOOL WINAPI ctrl_handler(DWORD type) {
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
+        running = 0;
+        return TRUE;
+    }
+    return FALSE;
+}
+#else
+static void ctrl_handler(int sig) {
+    (void)sig;
+    running = 0;
+}
+#endif
 
 static uint64_t get_time_ms(void) {
 #ifdef _WIN32
@@ -241,6 +258,8 @@ int main(int argc, char *argv[]) {
     int duration = DEFAULT_DURATION;
     char *output_file = NULL;
     int debug = 0;
+    int continuous = 0;
+    int stats_interval = STATS_INTERVAL_SEC;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--fpga-ip") == 0 && i + 1 < argc) fpga_ip = argv[++i];
@@ -249,6 +268,8 @@ int main(int argc, char *argv[]) {
         else if (strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) duration = atoi(argv[++i]);
         else if (strcmp(argv[i], "--debug") == 0) debug = 1;
         else if (strcmp(argv[i], "--window") == 0 && i + 1 < argc) window_size = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--continuous") == 0) continuous = 1;
+        else if (strcmp(argv[i], "--stats-interval") == 0 && i + 1 < argc) stats_interval = atoi(argv[++i]);
         else { printf("Unknown option: %s\n", argv[i]); return 1; }
     }
 
@@ -285,6 +306,12 @@ int main(int argc, char *argv[]) {
 
     set_nonblocking(sock_fd);
 
+#ifdef _WIN32
+    SetConsoleCtrlHandler(ctrl_handler, TRUE);
+#else
+    signal(SIGINT, ctrl_handler);
+#endif
+
     // Drain any stale packets from previous run
     {
         int drained = 0;
@@ -301,6 +328,22 @@ int main(int argc, char *argv[]) {
     }
 
     // Reset state for fresh start
+    send_cmd_wait_ack(CMD_STOP, "STOP(reset)");
+
+    {
+        int drained = 0;
+        uint8_t drain_buf2[MAX_PKT_SIZE];
+        struct sockaddr_in drain_addr2;
+        socklen_t drain_len2 = sizeof(drain_addr2);
+        for (int i = 0; i < 10000; i++) {
+            int n = recvfrom(sock_fd, (char *)drain_buf2, MAX_PKT_SIZE, 0,
+                             (struct sockaddr *)&drain_addr2, &drain_len2);
+            if (n < 0) break;
+            drained++;
+        }
+        if (drained > 0) printf("[APP] Drained %d stale packets after STOP\n", drained);
+    }
+
     expected_seq = 0;
     abs_credit = window_size;
     highest_seq = 0;
@@ -309,7 +352,11 @@ int main(int argc, char *argv[]) {
 
     printf("[APP] %s\n", output_file ? "Writing raw payload data" :
            "Receive-only mode (use -o <file> to save)");
-    printf("[LUDP] Host started. FPGA=%s:%d window=%u\n", fpga_ip, DEFAULT_PORT, window_size);
+    if (continuous) {
+        printf("[APP] Continuous mode - press Ctrl+C to stop\n");
+    }
+    printf("[LUDP] Host started. FPGA=%s:%d window=%u stats_interval=%ds\n",
+           fpga_ip, DEFAULT_PORT, window_size, stats_interval);
 
     FILE *out_fp = NULL;
     if (output_file) {
@@ -331,13 +378,18 @@ int main(int argc, char *argv[]) {
 
     uint64_t start_time = get_time_ms();
     uint64_t last_stats_time = start_time;
+    uint64_t last_data_time = start_time;
+    uint64_t last_credit_time = start_time;
+    uint64_t last_warn_time = start_time;
     uint32_t last_credit_seq = 0;
+    stats_t interval_stats = {0};
 
     while (running) {
         uint64_t now = get_time_ms();
-        if (now - start_time >= (uint64_t)duration * 1000) break;
+        if (!continuous && (now - start_time >= (uint64_t)duration * 1000)) break;
 
         int got_data = 0;
+        int rx_count = 0;
         for (int b = 0; b < 1024; b++) {
             uint8_t buf[MAX_PKT_SIZE];
             struct sockaddr_in from_addr;
@@ -360,7 +412,18 @@ int main(int argc, char *argv[]) {
 
             uint8_t pkt_type = buf[2];
             if (pkt_type == PKT_DATA) {
+                uint64_t prev_rx = stats.packets_received;
                 process_data_packet(buf, n, out_fp);
+                if (stats.packets_received > prev_rx) {
+                    interval_stats.packets_received++;
+                    interval_stats.bytes_received += n;
+                    interval_stats.packets_processed++;
+                    if (stats.packets_out_of_order > interval_stats.packets_out_of_order) {
+                        interval_stats.packets_out_of_order++;
+                        interval_stats.gap_count += stats.gap_count - interval_stats.gap_count;
+                    }
+                    rx_count++;
+                }
                 got_data = 1;
             } else if (pkt_type == PKT_CMD_ACK || pkt_type == PKT_CMD_CPL) {
                 if (debug) {
@@ -368,7 +431,22 @@ int main(int argc, char *argv[]) {
                     printf("[DEBUG RX] CMD_ACK/CPL cmd_id=%u\n", rx_cmd_id);
                 }
             }
+
+            if (rx_count >= CREDIT_INTERVAL) {
+                uint32_t new_credit = expected_seq + window_size;
+                if (new_credit > abs_credit) {
+                    build_credit(credit_pkt, new_credit);
+                    sendto(sock_fd, (const char *)credit_pkt, 16, 0,
+                           (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
+                    abs_credit = new_credit;
+                    last_credit_seq = expected_seq;
+                    last_credit_time = get_time_ms();
+                }
+                rx_count = 0;
+            }
         }
+
+        if (got_data) last_data_time = get_time_ms();
 
         if (expected_seq != last_credit_seq) {
             uint32_t new_credit = expected_seq + window_size;
@@ -378,6 +456,58 @@ int main(int argc, char *argv[]) {
                        (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
                 abs_credit = new_credit;
                 last_credit_seq = expected_seq;
+                last_credit_time = get_time_ms();
+            }
+        }
+
+        now = get_time_ms();
+        if (now - last_credit_time >= 100) {
+            build_credit(credit_pkt, abs_credit);
+            sendto(sock_fd, (const char *)credit_pkt, 16, 0,
+                   (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
+            last_credit_time = now;
+        }
+
+        if (now - last_warn_time >= 2000 && now - last_data_time >= 2000) {
+            printf("[WARN] No data for %.1fs, resending credit=%u expected=%u\n",
+                   (now - last_data_time) / 1000.0, abs_credit, expected_seq);
+            last_warn_time = now;
+        }
+
+        if (now - last_data_time >= 5000 && continuous) {
+            printf("[RECOVERY] No data for 5s, attempting FPGA reset...\n");
+            send_cmd_wait_ack(CMD_STOP, "STOP(recovery)");
+
+            {
+                uint8_t drain_buf[MAX_PKT_SIZE];
+                struct sockaddr_in drain_addr;
+                socklen_t drain_len = sizeof(drain_addr);
+                for (int i = 0; i < 10000; i++) {
+                    int n = recvfrom(sock_fd, (char *)drain_buf, MAX_PKT_SIZE, 0,
+                                     (struct sockaddr *)&drain_addr, &drain_len);
+                    if (n < 0) break;
+                }
+            }
+
+            expected_seq = 0;
+            abs_credit = 0;
+            highest_seq = 0;
+            memset(&stats, 0, sizeof(stats));
+            memset(&interval_stats, 0, sizeof(interval_stats));
+            last_credit_seq = 0;
+
+            if (send_cmd_wait_ack(CMD_START, "START(recovery)")) {
+                abs_credit = window_size;
+                send_credit(abs_credit);
+                start_time = get_time_ms();
+                last_stats_time = start_time;
+                last_data_time = start_time;
+                last_credit_time = start_time;
+                last_warn_time = start_time;
+                printf("[RECOVERY] FPGA reset successful, resuming data capture\n");
+            } else {
+                printf("[RECOVERY] FPGA reset failed, will retry in 5s\n");
+                last_data_time = now;
             }
         }
 
@@ -390,18 +520,29 @@ int main(int argc, char *argv[]) {
         }
 
         now = get_time_ms();
-        if (now - last_stats_time >= 1000) {
-            double elapsed = (now - start_time) / 1000.0;
-            double mbps = stats.bytes_received * 8.0 / (elapsed * 1e6);
-            double kpps = stats.packets_received / (elapsed * 1000.0);
-            double ooo_pct = stats.packets_received > 0 ?
+        if (now - last_stats_time >= (uint64_t)stats_interval * 1000) {
+            double int_elapsed = (now - last_stats_time) / 1000.0;
+            double int_mbps = interval_stats.bytes_received * 8.0 / (int_elapsed * 1e6);
+            double int_kpps = interval_stats.packets_received / (int_elapsed * 1000.0);
+            double int_ooo_pct = interval_stats.packets_received > 0 ?
+                100.0 * interval_stats.packets_out_of_order / interval_stats.packets_received : 0;
+
+            double total_elapsed = (now - start_time) / 1000.0;
+            double total_mbps = stats.bytes_received * 8.0 / (total_elapsed * 1e6);
+            double total_kpps = stats.packets_received / (total_elapsed * 1000.0);
+            double total_ooo_pct = stats.packets_received > 0 ?
                 100.0 * stats.packets_out_of_order / stats.packets_received : 0;
-            printf("[STATS] rx=" PRIu64_FMT " proc=" PRIu64_FMT " ooo=%.1f%% gaps=" PRIu64_FMT " %.1f Mbps %.1f kpps credit=%u\n",
+
+            printf("[STATS] interval: %.1f Mbps %.1f kpps ooo=%.1f%% rx=" PRIu64_FMT " | "
+                   "total: %.1f Mbps %.1f kpps ooo=%.1f%% rx=" PRIu64_FMT " gaps=" PRIu64_FMT " credit=%u exp=%u\n",
+                   int_mbps, int_kpps, int_ooo_pct,
+                   (unsigned long long)interval_stats.packets_received,
+                   total_mbps, total_kpps, total_ooo_pct,
                    (unsigned long long)stats.packets_received,
-                   (unsigned long long)stats.packets_processed,
-                   ooo_pct,
                    (unsigned long long)stats.gap_count,
-                   mbps, kpps, abs_credit);
+                   abs_credit, expected_seq);
+
+            interval_stats = (stats_t){0};
             last_stats_time = now;
         }
     }
