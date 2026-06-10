@@ -52,7 +52,7 @@ module ludp_protocol_tx #(
 
     input  wire [31:0] seq_num,
     input  wire [31:0] credit_limit,
-    input  wire        burst_active,
+    input  wire        f2h_tx_enabled,
     output logic       tx_data_done,
 
     input  wire [47:0] rx_src_ip,
@@ -89,8 +89,8 @@ module ludp_protocol_tx #(
 
     // TCP RFC 793 SEQ_GT: credit_limit is ahead of seq_num → we have credit to send.
     // Signed subtraction handles wrap-around: if seq=0xFFFFFFF8, credit_limit=0x00000010,
-    // $signed(0x00000010 - 0xFFFFFFF8) = $signed(24) > 0 → can_send = 1
-    wire can_send = burst_active && ($signed(credit_limit - seq_num) > 0);
+    // $signed(0x00000010 - 0xFFFFFFF8) = $signed(24) > 0 → f2h_tx_ok = 1 (credit available)
+    wire f2h_tx_ok = f2h_tx_enabled && ($signed(credit_limit - seq_num) > 0);
 
     taxi_axis_if #(
         .DATA_W(DATA_WIDTH),
@@ -146,7 +146,7 @@ module ludp_protocol_tx #(
                             tx_header_beat0_reg <= {resp_cmd_id, resp_status, TYPE_CMD_ACK, MAGIC};
                             tx_header_beat1_reg <= {48'h0, resp_opcode};
                         end
-                    end else if (tx_data_axis_tvalid && can_send) begin
+                    end else if (tx_data_axis_tvalid && f2h_tx_ok) begin
                         tx_state_reg          <= TX_DATA_HDR;
                         tx_payload_size_reg   <= tx_data_payload_size;
                         tx_header_beat0_reg   <= {seq_num, 8'h00, TYPE_DATA, MAGIC};
@@ -287,6 +287,8 @@ module ludp_protocol_tx #(
     assign tx_udp_source_port = udp_port;
     assign tx_udp_dest_port   = (rx_src_port != 16'h0) ? rx_src_port : udp_port;
 
+    // UDP length: response packets use RESP_UDP_LENGTH; data packets use
+    // full header size + payload (last packet may be shorter than max).
     always_comb begin
         tx_udp_length = RESP_UDP_LENGTH;
         if (tx_state_reg == TX_DATA_HDR || tx_state_reg == TX_DATA) begin

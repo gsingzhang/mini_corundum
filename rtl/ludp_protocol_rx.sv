@@ -66,7 +66,7 @@ module ludp_protocol_rx #(
     output logic [31:0] cmd_count,
     output logic [31:0] packets_retx,
 
-    input  wire         burst_active,
+    input  wire         f2h_tx_enabled,
     input  wire [31:0]  credit_limit,
     input  wire         resp_ongoing
 );
@@ -152,7 +152,7 @@ module ludp_protocol_rx #(
                             rx_resp_data   = 32'h0;
                             rx_resp_is_cpl = 1'b0;
                         end else begin
-                            rx_resp_data   = {burst_active, 31'h0};
+                            rx_resp_data   = {f2h_tx_enabled, 31'h0};
                             rx_resp_is_cpl = 1'b1;
                         end
 

@@ -88,7 +88,7 @@ module ludp_protocol #(
 
     output logic [31:0] tx_seq_num,
     output logic [31:0] rx_credit_limit,
-    output logic        burst_active,
+    output logic        f2h_tx_enabled,
     output logic [31:0] packets_sent,
     output logic [31:0] packets_retx,
     output logic [31:0] cmd_count,
@@ -100,7 +100,7 @@ module ludp_protocol #(
     // ================================================================
     logic [31:0] seq_num_reg;
     logic [31:0] credit_limit_reg;
-    logic        burst_active_reg;
+    logic        f2h_tx_enabled_reg;
     logic [31:0] packets_sent_reg;
 
     logic [15:0] resp_opcode_reg;
@@ -202,7 +202,7 @@ module ludp_protocol #(
         .cmd_count(cmd_count),
         .packets_retx(packets_retx),
 
-        .burst_active(burst_active_reg),
+        .f2h_tx_enabled(f2h_tx_enabled_reg),
         .credit_limit(credit_limit_reg),
         .resp_ongoing(resp_ongoing_reg)
     );
@@ -261,7 +261,7 @@ module ludp_protocol #(
 
         .seq_num(seq_num_reg),
         .credit_limit(credit_limit_reg),
-        .burst_active(burst_active_reg),
+        .f2h_tx_enabled(f2h_tx_enabled_reg),
         .tx_data_done(tx_data_done),
 
         .rx_src_ip(rx_src_ip),
@@ -281,7 +281,7 @@ module ludp_protocol #(
         if (rst) begin
             seq_num_reg       <= 0;
             credit_limit_reg    <= 0;
-            burst_active_reg  <= 1'b0;
+            f2h_tx_enabled_reg  <= 1'b0;
             packets_sent_reg  <= 0;
             resp_ongoing_reg    <= 1'b0;
             resp_opcode_reg   <= 16'h0;
@@ -300,12 +300,12 @@ module ludp_protocol #(
             end
 
             if (rx_cmd_start_req) begin
-                burst_active_reg <= 1'b1;
+                f2h_tx_enabled_reg <= 1'b1;
                 seq_num_reg      <= 0;
                 credit_limit_reg   <= 0;
             end
             if (rx_cmd_stop_req) begin
-                burst_active_reg <= 1'b0;
+                f2h_tx_enabled_reg <= 1'b0;
             end
 
             if (rx_credit_valid) begin
@@ -337,7 +337,7 @@ module ludp_protocol #(
     // ================================================================
     assign tx_seq_num      = seq_num_reg;
     assign rx_credit_limit = credit_limit_reg;
-    assign burst_active    = burst_active_reg;
+    assign f2h_tx_enabled    = f2h_tx_enabled_reg;
     assign packets_sent    = packets_sent_reg;
     assign status_ready    = 1'b1;
 

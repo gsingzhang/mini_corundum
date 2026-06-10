@@ -260,7 +260,7 @@ wire        ludp_tx_data_axis_tuser;
 wire [15:0] ludp_tx_data_payload_size;
 wire [31:0] ludp_tx_seq_num;
 wire [31:0] ludp_rx_credit_limit;
-wire        ludp_burst_active;
+wire        ludp_f2h_tx_enabled;
 wire [31:0] ludp_packets_sent;
 wire [31:0] ludp_packets_retx;
 wire [31:0] ludp_cmd_count;
@@ -272,7 +272,7 @@ reg [63:0] test_data_reg = 0;
 reg        test_data_valid_reg = 0;
 reg        test_data_last_reg = 0;
 reg [15:0] test_data_count_reg = 0;
-reg        burst_active_dly = 0;
+reg        f2h_tx_enabled_dly = 0;
 reg [15:0] test_data_payload_size_reg = 8960;  // Jumbo frame payload (requires MTU>=9000)
 wire       test_data_fifo_tready;
 
@@ -282,12 +282,12 @@ always @(posedge clk) begin
         test_data_valid_reg <= 1'b0;
         test_data_last_reg <= 1'b0;
         test_data_count_reg <= 16'h0;
-        burst_active_dly <= 1'b0;
+        f2h_tx_enabled_dly <= 1'b0;
         test_data_payload_size_reg <= 8960;  // Jumbo frame payload
     end else begin
-        burst_active_dly <= ludp_burst_active;
+        f2h_tx_enabled_dly <= ludp_f2h_tx_enabled;
 
-        if (ludp_burst_active) begin
+        if (ludp_f2h_tx_enabled) begin
             test_data_valid_reg <= 1'b1;
             if (test_data_valid_reg && test_data_fifo_tready) begin
                 test_data_reg <= {test_data_count_reg[7:0], 56'h0};
@@ -441,14 +441,14 @@ ludp_protocol_inst (
 
     .tx_seq_num(ludp_tx_seq_num),
     .rx_credit_limit(ludp_rx_credit_limit),
-    .burst_active(ludp_burst_active),
+    .f2h_tx_enabled(ludp_f2h_tx_enabled),
     .packets_sent(ludp_packets_sent),
     .packets_retx(ludp_packets_retx),
     .cmd_count(ludp_cmd_count)
 );
 
 assign ludp_status_opcode = 16'h0;
-assign ludp_status_data  = {burst_active_dly, 31'h0};
+assign ludp_status_data  = {f2h_tx_enabled_dly, 31'h0};
 assign ludp_status_valid = 1'b0;
 assign ludp_cmd_ready    = 1'b1;
 
@@ -459,7 +459,7 @@ always @(posedge clk) begin
     if (rst) begin
         led_reg <= 8'h00;
     end else begin
-        led_reg <= {ludp_burst_active, ludp_cmd_count[6:0]};
+        led_reg <= {ludp_f2h_tx_enabled, ludp_cmd_count[6:0]};
     end
 end
 
