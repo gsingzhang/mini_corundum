@@ -31,7 +31,13 @@ ETH_RTL_DIR = $(LIB_DIR)/eth/rtl
 AXIS_RTL_DIR = $(LIB_DIR)/eth/lib/axis/rtl
 
 # Source files
+VERILOG_SOURCES += $(RTL_DIR)/taxi_axis_if.sv
+VERILOG_SOURCES += $(RTL_DIR)/taxi_axis_arb_mux.sv
+VERILOG_SOURCES += $(RTL_DIR)/taxi_arbiter.sv
+VERILOG_SOURCES += $(RTL_DIR)/taxi_penc.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol.sv
+VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol_rx.sv
+VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol_tx.sv
 VERILOG_SOURCES += $(RTL_DIR)/icmp_echo_reply.sv
 VERILOG_SOURCES += $(RTL_DIR)/$(DUT).v
 VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_mac_10g_fifo.v
@@ -72,6 +78,7 @@ VERILOG_SOURCES += $(AXIS_RTL_DIR)/axis_fifo.v
 VERILOG_SOURCES += $(AXIS_RTL_DIR)/axis_async_fifo.v
 VERILOG_SOURCES += $(AXIS_RTL_DIR)/axis_async_fifo_adapter.v
 VERILOG_SOURCES += $(AXIS_RTL_DIR)/sync_reset.v
+VERILOG_SOURCES += $(AXIS_RTL_DIR)/axis_arb_mux.v
 
 # Testbench
 VERILOG_SOURCES += $(TB_TOP).v
@@ -82,6 +89,7 @@ VCS_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
     -debug_access+all -kdb \
     +v2k \
     +libext+.v+.sv \
+    -ignore initializer_driver_checks \
     -CFLAGS "-DVCS" \
     -f filelist.f \
     -top $(TB_TOP) \
