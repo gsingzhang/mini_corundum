@@ -50,44 +50,44 @@ set SYN_FILES [list \
     "rtl/taxi_axis_arb_mux.sv" \
     "rtl/taxi_arbiter.sv" \
     "rtl/taxi_penc.sv" \
-    "lib/eth/rtl/eth_mac_10g_fifo.v" \
-    "lib/eth/rtl/eth_mac_10g.v" \
-    "lib/eth/rtl/axis_xgmii_rx_64.v" \
-    "lib/eth/rtl/axis_xgmii_tx_64.v" \
-    "lib/eth/rtl/eth_phy_10g.v" \
-    "lib/eth/rtl/eth_phy_10g_rx.v" \
-    "lib/eth/rtl/eth_phy_10g_rx_if.v" \
-    "lib/eth/rtl/eth_phy_10g_rx_frame_sync.v" \
-    "lib/eth/rtl/eth_phy_10g_rx_ber_mon.v" \
-    "lib/eth/rtl/eth_phy_10g_rx_watchdog.v" \
-    "lib/eth/rtl/eth_phy_10g_tx.v" \
-    "lib/eth/rtl/eth_phy_10g_tx_if.v" \
-    "lib/eth/rtl/xgmii_baser_dec_64.v" \
-    "lib/eth/rtl/xgmii_baser_enc_64.v" \
-    "lib/eth/rtl/lfsr.v" \
-    "lib/eth/rtl/eth_axis_rx.v" \
-    "lib/eth/rtl/eth_axis_tx.v" \
-    "lib/eth/rtl/udp_complete_64.v" \
-    "lib/eth/rtl/udp_checksum_gen_64.v" \
-    "lib/eth/rtl/udp_64.v" \
-    "lib/eth/rtl/udp_ip_rx_64.v" \
-    "lib/eth/rtl/udp_ip_tx_64.v" \
-    "lib/eth/rtl/ip_complete_64.v" \
-    "lib/eth/rtl/ip_64.v" \
-    "lib/eth/rtl/ip_eth_rx_64.v" \
-    "lib/eth/rtl/ip_eth_tx_64.v" \
-    "lib/eth/rtl/ip_arb_mux.v" \
-    "lib/eth/rtl/arp.v" \
-    "lib/eth/rtl/arp_cache.v" \
-    "lib/eth/rtl/arp_eth_rx.v" \
-    "lib/eth/rtl/arp_eth_tx.v" \
-    "lib/eth/rtl/eth_arb_mux.v" \
-    "lib/eth/lib/axis/rtl/arbiter.v" \
-    "lib/eth/lib/axis/rtl/priority_encoder.v" \
-    "lib/eth/lib/axis/rtl/axis_fifo.v" \
-    "lib/eth/lib/axis/rtl/axis_async_fifo.v" \
-    "lib/eth/lib/axis/rtl/axis_async_fifo_adapter.v" \
-    "lib/eth/lib/axis/rtl/sync_reset.v" \
+    "rtl/lib_eth/eth_mac_10g_fifo.v" \
+    "rtl/lib_eth/eth_mac_10g.v" \
+    "rtl/lib_eth/axis_xgmii_rx_64.v" \
+    "rtl/lib_eth/axis_xgmii_tx_64.v" \
+    "rtl/lib_eth/eth_phy_10g.v" \
+    "rtl/lib_eth/eth_phy_10g_rx.v" \
+    "rtl/lib_eth/eth_phy_10g_rx_if.v" \
+    "rtl/lib_eth/eth_phy_10g_rx_frame_sync.v" \
+    "rtl/lib_eth/eth_phy_10g_rx_ber_mon.v" \
+    "rtl/lib_eth/eth_phy_10g_rx_watchdog.v" \
+    "rtl/lib_eth/eth_phy_10g_tx.v" \
+    "rtl/lib_eth/eth_phy_10g_tx_if.v" \
+    "rtl/lib_eth/xgmii_baser_dec_64.v" \
+    "rtl/lib_eth/xgmii_baser_enc_64.v" \
+    "rtl/lib_eth/lfsr.v" \
+    "rtl/lib_eth/eth_axis_rx.v" \
+    "rtl/lib_eth/eth_axis_tx.v" \
+    "rtl/lib_eth/udp_complete_64.v" \
+    "rtl/lib_eth/udp_checksum_gen_64.v" \
+    "rtl/lib_eth/udp_64.v" \
+    "rtl/lib_eth/udp_ip_rx_64.v" \
+    "rtl/lib_eth/udp_ip_tx_64.v" \
+    "rtl/lib_eth/ip_complete_64.v" \
+    "rtl/lib_eth/ip_64.v" \
+    "rtl/lib_eth/ip_eth_rx_64.v" \
+    "rtl/lib_eth/ip_eth_tx_64.v" \
+    "rtl/lib_eth/ip_arb_mux.v" \
+    "rtl/lib_eth/arp.v" \
+    "rtl/lib_eth/arp_cache.v" \
+    "rtl/lib_eth/arp_eth_rx.v" \
+    "rtl/lib_eth/arp_eth_tx.v" \
+    "rtl/lib_eth/eth_arb_mux.v" \
+    "rtl/lib_axis/arbiter.v" \
+    "rtl/lib_axis/priority_encoder.v" \
+    "rtl/lib_axis/axis_fifo.v" \
+    "rtl/lib_axis/axis_async_fifo.v" \
+    "rtl/lib_axis/axis_async_fifo_adapter.v" \
+    "rtl/lib_axis/sync_reset.v" \
 ]
 
 # External library files (absolute path)
@@ -105,11 +105,11 @@ set IP_TCL_FILES [list \
     "ip/eth_xcvr_gt.tcl" \
 ]
 
-# Other TCL constraint files (relative to mini_corundum_root)
+# Other TCL constraint files (relative to script/FPGA directory)
 set CONSTRAINT_TCL_FILES [list \
-    "lib/eth/syn/vivado/eth_mac_fifo.tcl" \
-    "lib/eth/lib/axis/syn/vivado/axis_async_fifo.tcl" \
-    "lib/eth/lib/axis/syn/vivado/sync_reset.tcl" \
+    "syn/eth_mac_fifo.tcl" \
+    "syn/axis_async_fifo.tcl" \
+    "syn/sync_reset.tcl" \
 ]
 
 # Function to get absolute path relative to mini_corundum_root
@@ -171,7 +171,7 @@ foreach file $IP_TCL_FILES {
 
 # Source constraint TCL files
 foreach file $CONSTRAINT_TCL_FILES {
-    set abs_path [get_abs_path $file]
+    set abs_path [file normalize [file join $initial_dir $file]]
     if {![file exists $abs_path]} {
         puts "WARNING: Constraint TCL file not found: $abs_path"
     }
