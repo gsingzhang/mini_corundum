@@ -251,19 +251,32 @@ wire [15:0] ludp_status_opcode;
 wire [31:0] ludp_status_data;
 wire        ludp_status_valid;
 wire        ludp_status_ready;
-wire [63:0] ludp_tx_data_axis_tdata;
-wire [7:0]  ludp_tx_data_axis_tkeep;
-wire        ludp_tx_data_axis_tvalid;
-wire        ludp_tx_data_axis_tready;
-wire        ludp_tx_data_axis_tlast;
-wire        ludp_tx_data_axis_tuser;
-wire [15:0] ludp_tx_data_payload_size;
+wire [63:0] ludp_dma_axis_tdata;
+wire [7:0]  ludp_dma_axis_tkeep;
+wire        ludp_dma_axis_tvalid;
+wire        ludp_dma_axis_tready;
+wire        ludp_dma_axis_tlast;
+wire        ludp_dma_axis_tuser;
+wire [15:0] ludp_dma_pkt_size;
 wire [31:0] ludp_tx_seq_num;
 wire [31:0] ludp_rx_credit_limit;
 wire        ludp_f2h_tx_enabled;
 wire [31:0] ludp_packets_sent;
 wire [31:0] ludp_packets_retx;
 wire [31:0] ludp_cmd_count;
+wire [15:0] ludp_last_payload_size;
+
+// Retx buffer external memory signals
+wire [31:0] ludp_retx_mem_wr_addr;
+wire [63:0] ludp_retx_mem_wr_data;
+wire [7:0]  ludp_retx_mem_wr_strb;
+wire        ludp_retx_mem_wr_valid;
+wire        ludp_retx_mem_wr_ready;
+wire [31:0] ludp_retx_mem_rd_addr;
+wire        ludp_retx_mem_rd_valid;
+wire        ludp_retx_mem_rd_ready;
+wire [63:0] ludp_retx_mem_rd_data;
+wire        ludp_retx_mem_rd_valid_in;
 
 // Test data generator for ultrasonic data simulation
 // Supports variable payload sizes from 8 bytes up to jumbo frames
@@ -360,19 +373,20 @@ ludp_tx_fifo_inst (
     .status_good_frame()
 );
 
-assign ludp_tx_data_axis_tdata  = ludp_tx_fifo_axis_tdata;
-assign ludp_tx_data_axis_tkeep  = ludp_tx_fifo_axis_tkeep;
-assign ludp_tx_data_axis_tvalid = ludp_tx_fifo_axis_tvalid;
-assign ludp_tx_data_axis_tlast  = ludp_tx_fifo_axis_tlast;
-assign ludp_tx_data_axis_tuser  = ludp_tx_fifo_axis_tuser;
-assign ludp_tx_data_payload_size = test_data_payload_size_reg;
-assign ludp_tx_fifo_axis_tready = ludp_tx_data_axis_tready;
+assign ludp_dma_axis_tdata  = ludp_tx_fifo_axis_tdata;
+assign ludp_dma_axis_tkeep  = ludp_tx_fifo_axis_tkeep;
+assign ludp_dma_axis_tvalid = ludp_tx_fifo_axis_tvalid;
+assign ludp_dma_axis_tlast  = ludp_tx_fifo_axis_tlast;
+assign ludp_dma_axis_tuser  = ludp_tx_fifo_axis_tuser;
+assign ludp_dma_pkt_size    = test_data_payload_size_reg;
+assign ludp_tx_fifo_axis_tready = ludp_dma_axis_tready;
 
 // LUDP Protocol Instance
 ludp_protocol #(
     .DATA_WIDTH(64),
     .KEEP_WIDTH(8),
-    .RETRY_TIMEOUT(10000)
+    .NUM_BLOCKS(3),
+    .MEM_SLOT_SIZE(16384)
 )
 ludp_protocol_inst (
     .clk(clk),
@@ -395,13 +409,13 @@ ludp_protocol_inst (
     .status_valid(ludp_status_valid),
     .status_ready(ludp_status_ready),
 
-    .tx_data_axis_tdata(ludp_tx_data_axis_tdata),
-    .tx_data_axis_tkeep(ludp_tx_data_axis_tkeep),
-    .tx_data_axis_tvalid(ludp_tx_data_axis_tvalid),
-    .tx_data_axis_tready(ludp_tx_data_axis_tready),
-    .tx_data_axis_tlast(ludp_tx_data_axis_tlast),
-    .tx_data_axis_tuser(ludp_tx_data_axis_tuser),
-    .tx_data_payload_size(ludp_tx_data_payload_size),
+    .dma_axis_tdata(ludp_dma_axis_tdata),
+    .dma_axis_tkeep(ludp_dma_axis_tkeep),
+    .dma_axis_tvalid(ludp_dma_axis_tvalid),
+    .dma_axis_tready(ludp_dma_axis_tready),
+    .dma_axis_tlast(ludp_dma_axis_tlast),
+    .dma_axis_tuser(ludp_dma_axis_tuser),
+    .dma_pkt_size(ludp_dma_pkt_size),
 
     .rx_udp_hdr_valid(rx_udp_hdr_valid),
     .rx_udp_hdr_ready(rx_udp_hdr_ready),
@@ -444,13 +458,60 @@ ludp_protocol_inst (
     .f2h_tx_enabled(ludp_f2h_tx_enabled),
     .packets_sent(ludp_packets_sent),
     .packets_retx(ludp_packets_retx),
-    .cmd_count(ludp_cmd_count)
+    .cmd_count(ludp_cmd_count),
+    .last_payload_size(ludp_last_payload_size),
+
+    .retx_mem_wr_addr (ludp_retx_mem_wr_addr),
+    .retx_mem_wr_data (ludp_retx_mem_wr_data),
+    .retx_mem_wr_strb (ludp_retx_mem_wr_strb),
+    .retx_mem_wr_valid(ludp_retx_mem_wr_valid),
+    .retx_mem_wr_ready(ludp_retx_mem_wr_ready),
+
+    .retx_mem_rd_addr  (ludp_retx_mem_rd_addr),
+    .retx_mem_rd_valid (ludp_retx_mem_rd_valid),
+    .retx_mem_rd_ready (ludp_retx_mem_rd_ready),
+    .retx_mem_rd_data  (ludp_retx_mem_rd_data),
+    .retx_mem_rd_valid_in(ludp_retx_mem_rd_valid_in)
 );
 
 assign ludp_status_opcode = 16'h0;
 assign ludp_status_data  = {f2h_tx_enabled_dly, 31'h0};
 assign ludp_status_valid = 1'b0;
 assign ludp_cmd_ready    = 1'b1;
+
+// Retx buffer external memory model (simple 1R1W RAM)
+// In real application, this connects to DDR/AXI RAM
+taxi_ram_1r1w_1c #(
+    .ADDR_W(16),
+    .DATA_W(64),
+    .STRB_EN(1'b1),
+    .STRB_W(8)
+) retx_ram_inst (
+    .clk(clk),
+
+    .wr_en(ludp_retx_mem_wr_valid),
+    .wr_addr(ludp_retx_mem_wr_addr[15:0]),
+    .wr_data(ludp_retx_mem_wr_data),
+    .wr_strb(ludp_retx_mem_wr_strb),
+
+    .rd_en(ludp_retx_mem_rd_valid),
+    .rd_addr(ludp_retx_mem_rd_addr[15:0]),
+    .rd_data(ludp_retx_mem_rd_data)
+);
+
+assign ludp_retx_mem_wr_ready = 1'b1;
+assign ludp_retx_mem_rd_ready = 1'b1;
+
+// taxi_ram_1r1w_1c has 1-cycle read latency: data is valid the cycle AFTER rd_en.
+// Delay rd_valid by 1 cycle to match.
+reg ludp_retx_mem_rd_valid_d;
+always @(posedge clk) begin
+    if (rst)
+        ludp_retx_mem_rd_valid_d <= 1'b0;
+    else
+        ludp_retx_mem_rd_valid_d <= ludp_retx_mem_rd_valid;
+end
+assign ludp_retx_mem_rd_valid_in = ludp_retx_mem_rd_valid_d;
 
 // LED output: show burst status and command count
 reg [7:0] led_reg = 0;

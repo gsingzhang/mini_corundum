@@ -59,6 +59,9 @@ module ludp_protocol_rx #(
     output logic [15:0] rx_status_opcode,
     output logic [31:0] rx_status_data,
 
+    output logic        rx_retx_req,
+    output logic [31:0] rx_retx_seq,
+
     output logic [47:0] rx_src_mac,
     output logic [31:0] rx_src_ip,
     output logic [15:0] rx_src_port,
@@ -136,6 +139,8 @@ module ludp_protocol_rx #(
         rx_status_req    = 1'b0;
         rx_status_opcode = 16'h0;
         rx_status_data   = 32'h0;
+        rx_retx_req      = 1'b0;
+        rx_retx_seq      = 32'h0;
 
         if (rx_pkt_complete) begin
             // Use latched beat 0 fields (valid at tlast for multi-beat packets)
@@ -163,6 +168,11 @@ module ludp_protocol_rx #(
                             default: ;
                         endcase
                     end
+                end
+
+                TYPE_NACK: begin
+                    rx_retx_req = 1'b1;
+                    rx_retx_seq = rx_seq_reg;
                 end
 
                 TYPE_CREDIT: begin

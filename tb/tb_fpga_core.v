@@ -1384,6 +1384,9 @@ initial begin
         integer frames_before_stall;
         integer wait_count2;
         integer frames_after_wait;
+        reg [31:0] retx_target_seq;
+        reg [7:0]  retx_type;
+        reg [31:0] retx_seq;
 
         // Reset DUT for clean state
         reset_dut();
@@ -1437,9 +1440,49 @@ initial begin
             error_count = error_count + 1;
         end
 
-        // Stop
+        // ============================================================
+        // Test 14: NACK retransmission
+        // ============================================================
+        test_num = 14;
+        $display("");
+        $display("[%0t] ========================================", $time);
+        $display("[%0t] Test 14: NACK retransmission", $time);
+        $display("[%0t] ========================================", $time);
+
+        // Send a credit to get one data packet, then NACK it
         reset_tx_capture();
+        send_ludp_credit(dut.ludp_tx_seq_num + 32'h1);
+        wait_for_tx_frames(1, 5000);
+        repeat(100) @(posedge clk);
+
+        // Stop data generation so no new/backlog frames interfere with NACK response
         send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        repeat(2000) @(posedge clk);
+
+        // Capture the seq of the most recently sent packet (after all in-flight packets are done)
+        retx_target_seq = dut.ludp_tx_seq_num - 32'h1;
+        $display("[%0t] Test 14: Last sent packet seq=%08h, now sending NACK", $time, retx_target_seq);
+
+        // Send NACK for that seq
+        reset_tx_capture();
+        send_ludp_nack(retx_target_seq, 16'h1);
+        wait_for_tx_frame(5000);
+
+        if (tx_frame_count > 0) begin
+            retx_type = get_tx_byte(44);
+            retx_seq  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
+            $display("[%0t] Test 14: Retransmitted packet type=%02h seq=%08h", $time, retx_type, retx_seq);
+            if (retx_type == TYPE_DATA && retx_seq == retx_target_seq) begin
+                $display("[%0t] PASS: Retransmitted packet correct", $time);
+            end else begin
+                $display("[%0t] ERROR: Retransmitted packet mismatch (expected type=%02h seq=%08h)", $time, TYPE_DATA, retx_target_seq);
+                error_count = error_count + 1;
+            end
+        end else begin
+            $display("[%0t] ERROR: No retransmitted frame captured", $time);
+            error_count = error_count + 1;
+        end
+
         repeat(500) @(posedge clk);
     end
 

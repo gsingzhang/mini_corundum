@@ -38,8 +38,11 @@ VERILOG_SOURCES += $(RTL_DIR)/taxi_penc.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol_rx.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol_tx.sv
+VERILOG_SOURCES += $(RTL_DIR)/ludp_unified_buffer.sv
 VERILOG_SOURCES += $(RTL_DIR)/icmp_echo_reply.sv
 VERILOG_SOURCES += $(RTL_DIR)/$(DUT).v
+# taxi RAM primitive for retx buffer external memory
+VERILOG_SOURCES += /home/gxzhang/gx/prj/taxi/src/prim/rtl/taxi_ram_1r1w_1c.sv
 VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_mac_10g_fifo.v
 VERILOG_SOURCES += $(ETH_RTL_DIR)/eth_mac_10g.v
 VERILOG_SOURCES += $(ETH_RTL_DIR)/axis_xgmii_rx_64.v

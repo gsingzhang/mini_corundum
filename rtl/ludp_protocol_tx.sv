@@ -1,6 +1,3 @@
-// LUDP Protocol TX Module
-// Sends data packets and response packets through priority AXIS MUX
-// Response stream (port 0) has higher priority than data stream (port 1)
 module ludp_protocol_tx #(
     parameter int DATA_WIDTH        = 64,
     parameter int KEEP_WIDTH        = 8,
@@ -15,13 +12,17 @@ module ludp_protocol_tx #(
     input  wire [31:0] host_ip,
     input  wire [15:0] udp_port,
 
-    input  wire [DATA_WIDTH-1:0] tx_data_axis_tdata,
-    input  wire [KEEP_WIDTH-1:0] tx_data_axis_tkeep,
-    input  wire                  tx_data_axis_tvalid,
-    output logic                 tx_data_axis_tready,
-    input  wire                  tx_data_axis_tlast,
-    input  wire                  tx_data_axis_tuser,
-    input  wire [15:0]           tx_data_payload_size,
+    input  wire        tx_pkt_ready,
+    input  wire [15:0] tx_pkt_size,
+    output logic       tx_pkt_start,
+    input  wire [31:0] tx_pkt_seq,
+    input  wire [DATA_WIDTH-1:0] tx_axis_tdata,
+    input  wire [KEEP_WIDTH-1:0] tx_axis_tkeep,
+    input  wire                  tx_axis_tvalid,
+    output logic                 tx_axis_tready,
+    input  wire                  tx_axis_tlast,
+    input  wire                  tx_axis_tuser,
+    input  wire                  tx_pkt_done,
 
     output logic       tx_udp_hdr_valid,
     input  wire        tx_udp_hdr_ready,
@@ -53,10 +54,21 @@ module ludp_protocol_tx #(
     input  wire [31:0] seq_num,
     input  wire [31:0] credit_limit,
     input  wire        f2h_tx_enabled,
-    output logic       tx_data_done,
 
     input  wire [47:0] rx_src_ip,
     input  wire [15:0] rx_src_port,
+
+    input  wire        cmd_start_req,
+
+    input  wire [DATA_WIDTH-1:0] retx_axis_tdata,
+    input  wire [KEEP_WIDTH-1:0] retx_axis_tkeep,
+    input  wire                  retx_axis_tvalid,
+    output logic                 retx_axis_tready,
+    input  wire                  retx_axis_tlast,
+    input  wire                  retx_axis_tuser,
+    input  wire [15:0]           retx_pkt_size,
+    input  wire                  retx_found,
+    input  wire [31:0]           retx_seq_out,
 
     output logic [15:0] last_payload_size
 );
@@ -71,11 +83,13 @@ module ludp_protocol_tx #(
     localparam int TOTAL_HDR_BYTES   = UDP_HEADER_BYTES + LUDP_HEADER_BYTES;
     localparam logic [15:0] RESP_UDP_LENGTH = TOTAL_HDR_BYTES;
 
-    typedef enum logic [1:0] {
+    typedef enum logic [2:0] {
         TX_IDLE,
         TX_RESP,
         TX_DATA_HDR,
-        TX_DATA
+        TX_DATA,
+        TX_RETX_HDR,
+        TX_RETX
     } tx_state_t;
 
     tx_state_t tx_state_reg;
@@ -87,9 +101,6 @@ module ludp_protocol_tx #(
     logic [15:0] tx_payload_size_reg;
     logic [15:0] tx_payload_bytes_sent_reg;
 
-    // TCP RFC 793 SEQ_GT: credit_limit is ahead of seq_num → we have credit to send.
-    // Signed subtraction handles wrap-around: if seq=0xFFFFFFF8, credit_limit=0x00000010,
-    // $signed(0x00000010 - 0xFFFFFFF8) = $signed(24) > 0 → f2h_tx_ok = 1 (credit available)
     wire f2h_tx_ok = f2h_tx_enabled && ($signed(credit_limit - seq_num) > 0);
 
     taxi_axis_if #(
@@ -107,23 +118,18 @@ module ludp_protocol_tx #(
     ) tx_axis_m ();
 
     always_comb begin
-        resp_done   = 1'b0;
-        tx_data_done = 1'b0;
+        resp_done = 1'b0;
 
         case (tx_state_reg)
             TX_RESP: begin
                 if (tx_axis_s[0].tvalid && tx_axis_s[0].tready && tx_axis_s[0].tlast)
                     resp_done = 1'b1;
             end
-            TX_DATA: begin
-                if (tx_data_axis_tvalid && tx_axis_s[1].tready && tx_data_axis_tlast)
-                    tx_data_done = 1'b1;
-            end
         endcase
     end
 
     always_ff @(posedge clk) begin
-        if (rst) begin
+        if (rst || cmd_start_req) begin
             tx_state_reg            <= TX_IDLE;
             tx_beat_count_reg       <= 0;
             tx_header_beat0_reg     <= 0;
@@ -146,11 +152,17 @@ module ludp_protocol_tx #(
                             tx_header_beat0_reg <= {resp_cmd_id, resp_status, TYPE_CMD_ACK, MAGIC};
                             tx_header_beat1_reg <= {48'h0, resp_opcode};
                         end
-                    end else if (tx_data_axis_tvalid && f2h_tx_ok) begin
+                    end else if (retx_found) begin
+                        tx_state_reg        <= TX_RETX_HDR;
+                        tx_payload_size_reg <= retx_pkt_size;
+                        tx_header_beat0_reg <= {retx_seq_out, 8'h00, TYPE_DATA, MAGIC};
+                        tx_header_beat1_reg <= {16'h0000, 32'h0, retx_pkt_size};
+                        tx_beat_count_reg   <= 0;
+                    end else if (tx_pkt_ready && f2h_tx_ok) begin
                         tx_state_reg          <= TX_DATA_HDR;
-                        tx_payload_size_reg   <= tx_data_payload_size;
+                        tx_payload_size_reg   <= tx_pkt_size;
                         tx_header_beat0_reg   <= {seq_num, 8'h00, TYPE_DATA, MAGIC};
-                        tx_header_beat1_reg   <= {16'h0000, 32'h0, tx_data_payload_size};
+                        tx_header_beat1_reg   <= {16'h0000, 32'h0, tx_pkt_size};
                         tx_beat_count_reg     <= 0;
                     end
                 end
@@ -174,12 +186,29 @@ module ludp_protocol_tx #(
                 end
 
                 TX_DATA: begin
-                    if (tx_data_axis_tvalid && tx_axis_s[1].tready) begin
-                        if (tx_data_axis_tlast) begin
+                    if (tx_axis_tvalid && tx_axis_s[1].tready) begin
+                        if (tx_axis_tlast) begin
                             tx_payload_size_reg <= tx_payload_bytes_sent_reg + KEEP_WIDTH;
                             tx_state_reg        <= TX_IDLE;
                         end else begin
                             tx_payload_bytes_sent_reg <= tx_payload_bytes_sent_reg + KEEP_WIDTH;
+                        end
+                    end
+                end
+
+                TX_RETX_HDR: begin
+                    if (tx_axis_s[1].tvalid && tx_axis_s[1].tready) begin
+                        tx_beat_count_reg <= tx_beat_count_reg + 1;
+                        if (tx_beat_count_reg >= 4'd1) begin
+                            tx_state_reg <= TX_RETX;
+                        end
+                    end
+                end
+
+                TX_RETX: begin
+                    if (retx_axis_tvalid && retx_axis_tready) begin
+                        if (retx_axis_tlast) begin
+                            tx_state_reg <= TX_IDLE;
                         end
                     end
                 end
@@ -189,6 +218,13 @@ module ludp_protocol_tx #(
         end
     end
 
+    assign tx_pkt_start = (tx_state_reg == TX_IDLE) && !resp_ongoing &&
+                          !retx_found &&
+                          tx_pkt_ready && f2h_tx_ok;
+
+    assign tx_axis_tready = (tx_state_reg == TX_DATA) && tx_axis_s[1].tready;
+    assign retx_axis_tready = (tx_state_reg == TX_RETX) && tx_axis_s[1].tready;
+
     always_comb begin
         tx_axis_s[0].tdata  = {DATA_WIDTH{1'b0}};
         tx_axis_s[0].tkeep  = {KEEP_WIDTH{1'b1}};
@@ -197,7 +233,7 @@ module ludp_protocol_tx #(
         tx_axis_s[0].tstrb  = {KEEP_WIDTH{1'b1}};
         tx_axis_s[0].tid    = '0;
         tx_axis_s[0].tdest  = '0;
-        tx_axis_s[0].tuser  = '0;
+        tx_axis_s[0].tuser  = 1'b0;
 
         if (tx_state_reg == TX_RESP) begin
             case (tx_beat_count_reg)
@@ -228,9 +264,9 @@ module ludp_protocol_tx #(
         tx_axis_s[1].tstrb  = {KEEP_WIDTH{1'b1}};
         tx_axis_s[1].tid    = '0;
         tx_axis_s[1].tdest  = '0;
-        tx_axis_s[1].tuser  = '0;
+        tx_axis_s[1].tuser  = 1'b0;
 
-        if (tx_state_reg == TX_DATA_HDR) begin
+        if (tx_state_reg == TX_DATA_HDR || tx_state_reg == TX_RETX_HDR) begin
             case (tx_beat_count_reg)
                 4'd0: begin
                     tx_axis_s[1].tvalid = 1'b1;
@@ -247,14 +283,17 @@ module ludp_protocol_tx #(
                 end
             endcase
         end else if (tx_state_reg == TX_DATA) begin
-            tx_axis_s[1].tdata  = tx_data_axis_tdata;
-            tx_axis_s[1].tkeep  = tx_data_axis_tkeep;
-            tx_axis_s[1].tvalid = tx_data_axis_tvalid;
-            tx_axis_s[1].tlast  = tx_data_axis_tlast;
+            tx_axis_s[1].tdata  = tx_axis_tdata;
+            tx_axis_s[1].tkeep  = tx_axis_tkeep;
+            tx_axis_s[1].tvalid = tx_axis_tvalid;
+            tx_axis_s[1].tlast  = tx_axis_tlast;
+        end else if (tx_state_reg == TX_RETX) begin
+            tx_axis_s[1].tdata  = retx_axis_tdata;
+            tx_axis_s[1].tkeep  = retx_axis_tkeep;
+            tx_axis_s[1].tvalid = retx_axis_tvalid;
+            tx_axis_s[1].tlast  = retx_axis_tlast;
         end
     end
-
-    assign tx_data_axis_tready = (tx_state_reg == TX_DATA) && tx_axis_s[1].tready;
 
     taxi_axis_arb_mux #(
         .S_COUNT(2),
@@ -276,7 +315,8 @@ module ludp_protocol_tx #(
     assign tx_axis_m.tready = tx_udp_payload_axis_tready;
 
     assign tx_udp_hdr_valid = (tx_state_reg == TX_RESP) ||
-                              (tx_state_reg == TX_DATA_HDR);
+                              (tx_state_reg == TX_DATA_HDR) ||
+                              (tx_state_reg == TX_RETX_HDR);
 
     assign tx_udp_ip_dscp    = 6'h0;
     assign tx_udp_ip_ecn     = 2'h0;
@@ -287,11 +327,10 @@ module ludp_protocol_tx #(
     assign tx_udp_source_port = udp_port;
     assign tx_udp_dest_port   = (rx_src_port != 16'h0) ? rx_src_port : udp_port;
 
-    // UDP length: response packets use RESP_UDP_LENGTH; data packets use
-    // full header size + payload (last packet may be shorter than max).
     always_comb begin
         tx_udp_length = RESP_UDP_LENGTH;
-        if (tx_state_reg == TX_DATA_HDR || tx_state_reg == TX_DATA) begin
+        if (tx_state_reg == TX_DATA_HDR || tx_state_reg == TX_DATA ||
+            tx_state_reg == TX_RETX_HDR || tx_state_reg == TX_RETX) begin
             tx_udp_length = TOTAL_HDR_BYTES + tx_payload_size_reg;
         end
     end

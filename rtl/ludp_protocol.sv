@@ -1,24 +1,9 @@
-// Lightweight UDP (LUDP) Protocol Module
-// Top-level wrapper instantiating separate RX and TX submodules.
-//
-// Architecture:
-//   - ludp_protocol_rx: receives and parses host packets (CREDIT, CMD, NACK)
-//   - ludp_protocol_tx: sends data packets and response packets via AXIS MUX
-//   - Shared register block in this top module manages state shared between RX/TX
-//   - taxi_axis_arb_mux inside TX: response (high prio) > data (low prio)
-//
-// Packet Types:
-//   TYPE_DATA (0x01): Data payload packets from FPGA to host
-//   TYPE_CMD  (0x02): Command packets from host to FPGA
-//   TYPE_NACK (0x03): Negative acknowledgment
-//   TYPE_CMD_ACK (0x04): Command acknowledgment
-//   TYPE_CMD_CPL (0x05): Command completion
-//   TYPE_CREDIT  (0x06): Credit update for flow control
 module ludp_protocol #(
     parameter int DATA_WIDTH        = 64,
     parameter int KEEP_WIDTH        = 8,
     parameter int MAX_PAYLOAD_BYTES = 9000,
-    parameter int RETRY_TIMEOUT     = 10000
+    parameter int NUM_BLOCKS        = 3,
+    parameter int MEM_SLOT_SIZE     = 16384
 )(
     input  wire        clk,
     input  wire        rst,
@@ -40,13 +25,13 @@ module ludp_protocol #(
     input  wire         status_valid,
     output logic        status_ready,
 
-    input  wire [DATA_WIDTH-1:0] tx_data_axis_tdata,
-    input  wire [KEEP_WIDTH-1:0] tx_data_axis_tkeep,
-    input  wire                  tx_data_axis_tvalid,
-    output logic                 tx_data_axis_tready,
-    input  wire                  tx_data_axis_tlast,
-    input  wire                  tx_data_axis_tuser,
-    input  wire [15:0]           tx_data_payload_size,
+    input  wire [DATA_WIDTH-1:0] dma_axis_tdata,
+    input  wire [KEEP_WIDTH-1:0] dma_axis_tkeep,
+    input  wire                  dma_axis_tvalid,
+    output logic                 dma_axis_tready,
+    input  wire                  dma_axis_tlast,
+    input  wire                  dma_axis_tuser,
+    input  wire [15:0]           dma_pkt_size,
 
     input  wire        rx_udp_hdr_valid,
     output logic       rx_udp_hdr_ready,
@@ -92,12 +77,21 @@ module ludp_protocol #(
     output logic [31:0] packets_sent,
     output logic [31:0] packets_retx,
     output logic [31:0] cmd_count,
-    output logic [15:0] last_payload_size
+    output logic [15:0] last_payload_size,
+
+    output logic [31:0] retx_mem_wr_addr,
+    output logic [DATA_WIDTH-1:0] retx_mem_wr_data,
+    output logic [KEEP_WIDTH-1:0] retx_mem_wr_strb,
+    output logic                  retx_mem_wr_valid,
+    input  wire                   retx_mem_wr_ready,
+
+    output logic [31:0] retx_mem_rd_addr,
+    output logic                  retx_mem_rd_valid,
+    input  wire                   retx_mem_rd_ready,
+    input  wire  [DATA_WIDTH-1:0] retx_mem_rd_data,
+    input  wire                   retx_mem_rd_valid_in
 );
 
-    // ================================================================
-    // Shared registers (written by RX requests / TX done, managed here)
-    // ================================================================
     logic [31:0] seq_num_reg;
     logic [31:0] credit_limit_reg;
     logic        f2h_tx_enabled_reg;
@@ -110,7 +104,6 @@ module ludp_protocol #(
     logic        resp_ongoing_reg;
     logic        resp_is_cpl_reg;
 
-    // RX -> shared register request signals
     logic        rx_resp_req;
     logic [15:0] rx_resp_opcode;
     logic [31:0] rx_resp_cmd_id;
@@ -124,19 +117,38 @@ module ludp_protocol #(
     logic        rx_status_req;
     logic [15:0] rx_status_opcode;
     logic [31:0] rx_status_data;
+    logic        rx_retx_req;
+    logic [31:0] rx_retx_seq;
 
-    // TX -> shared register done signals
     logic        tx_resp_done;
-    logic        tx_data_done;
 
-    // RX captured source address (passed to TX for response routing)
     logic [47:0] rx_src_mac;
     logic [31:0] rx_src_ip;
     logic [15:0] rx_src_port;
 
-    // ================================================================
-    // RX instance
-    // ================================================================
+    logic        buf_tx_pkt_ready;
+    logic [15:0] buf_tx_pkt_size;
+    logic        buf_tx_pkt_start;
+    logic [31:0] buf_tx_pkt_seq;
+    logic [DATA_WIDTH-1:0] buf_tx_axis_tdata;
+    logic [KEEP_WIDTH-1:0] buf_tx_axis_tkeep;
+    logic                  buf_tx_axis_tvalid;
+    logic                  buf_tx_axis_tready;
+    logic                  buf_tx_axis_tlast;
+    logic                  buf_tx_axis_tuser;
+    logic                  buf_tx_pkt_done;
+
+    logic [DATA_WIDTH-1:0] buf_retx_axis_tdata;
+    logic [KEEP_WIDTH-1:0] buf_retx_axis_tkeep;
+    logic                  buf_retx_axis_tvalid;
+    logic                  buf_retx_axis_tready;
+    logic                  buf_retx_axis_tlast;
+    logic                  buf_retx_axis_tuser;
+    logic [15:0]           buf_retx_pkt_size;
+    logic                  buf_retx_found;
+    logic                  buf_retx_not_found;
+    logic [31:0]           buf_retx_seq_out;
+
     ludp_protocol_rx #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
@@ -195,6 +207,9 @@ module ludp_protocol #(
         .rx_status_opcode(rx_status_opcode),
         .rx_status_data(rx_status_data),
 
+        .rx_retx_req(rx_retx_req),
+        .rx_retx_seq(rx_retx_seq),
+
         .rx_src_mac(rx_src_mac),
         .rx_src_ip(rx_src_ip),
         .rx_src_port(rx_src_port),
@@ -207,9 +222,65 @@ module ludp_protocol #(
         .resp_ongoing(resp_ongoing_reg)
     );
 
-    // ================================================================
-    // TX instance
-    // ================================================================
+    ludp_unified_buffer #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .KEEP_WIDTH(KEEP_WIDTH),
+        .MAX_PAYLOAD_BYTES(MAX_PAYLOAD_BYTES),
+        .NUM_BLOCKS(NUM_BLOCKS),
+        .MEM_ADDR_W(32),
+        .MEM_SLOT_SIZE(MEM_SLOT_SIZE)
+    ) unified_buf_inst (
+        .clk(clk),
+        .rst(rst),
+
+        .dma_axis_tdata (dma_axis_tdata),
+        .dma_axis_tkeep (dma_axis_tkeep),
+        .dma_axis_tvalid(dma_axis_tvalid),
+        .dma_axis_tready(dma_axis_tready),
+        .dma_axis_tlast (dma_axis_tlast),
+        .dma_axis_tuser (dma_axis_tuser),
+        .dma_pkt_size   (dma_pkt_size),
+
+        .tx_pkt_ready   (buf_tx_pkt_ready),
+        .tx_pkt_size    (buf_tx_pkt_size),
+        .tx_pkt_start   (buf_tx_pkt_start),
+        .tx_pkt_seq     (buf_tx_pkt_seq),
+        .tx_axis_tdata  (buf_tx_axis_tdata),
+        .tx_axis_tkeep  (buf_tx_axis_tkeep),
+        .tx_axis_tvalid (buf_tx_axis_tvalid),
+        .tx_axis_tready (buf_tx_axis_tready),
+        .tx_axis_tlast  (buf_tx_axis_tlast),
+        .tx_axis_tuser  (buf_tx_axis_tuser),
+        .tx_pkt_done    (buf_tx_pkt_done),
+
+        .retx_req       (rx_retx_req),
+        .retx_seq       (rx_retx_seq),
+        .retx_found     (buf_retx_found),
+        .retx_not_found (buf_retx_not_found),
+        .retx_seq_out   (buf_retx_seq_out),
+        .retx_axis_tdata (buf_retx_axis_tdata),
+        .retx_axis_tkeep (buf_retx_axis_tkeep),
+        .retx_axis_tvalid(buf_retx_axis_tvalid),
+        .retx_axis_tready(buf_retx_axis_tready),
+        .retx_axis_tlast (buf_retx_axis_tlast),
+        .retx_axis_tuser (buf_retx_axis_tuser),
+        .retx_pkt_size  (buf_retx_pkt_size),
+
+        .mem_wr_addr  (retx_mem_wr_addr),
+        .mem_wr_data  (retx_mem_wr_data),
+        .mem_wr_strb  (retx_mem_wr_strb),
+        .mem_wr_valid (retx_mem_wr_valid),
+        .mem_wr_ready (retx_mem_wr_ready),
+
+        .mem_rd_addr    (retx_mem_rd_addr),
+        .mem_rd_valid   (retx_mem_rd_valid),
+        .mem_rd_ready   (retx_mem_rd_ready),
+        .mem_rd_data    (retx_mem_rd_data),
+        .mem_rd_valid_in(retx_mem_rd_valid_in),
+
+        .clear(rx_cmd_start_req)
+    );
+
     ludp_protocol_tx #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
@@ -224,13 +295,17 @@ module ludp_protocol #(
         .host_ip(host_ip),
         .udp_port(udp_port),
 
-        .tx_data_axis_tdata(tx_data_axis_tdata),
-        .tx_data_axis_tkeep(tx_data_axis_tkeep),
-        .tx_data_axis_tvalid(tx_data_axis_tvalid),
-        .tx_data_axis_tready(tx_data_axis_tready),
-        .tx_data_axis_tlast(tx_data_axis_tlast),
-        .tx_data_axis_tuser(tx_data_axis_tuser),
-        .tx_data_payload_size(tx_data_payload_size),
+        .tx_pkt_ready   (buf_tx_pkt_ready),
+        .tx_pkt_size    (buf_tx_pkt_size),
+        .tx_pkt_start   (buf_tx_pkt_start),
+        .tx_pkt_seq     (buf_tx_pkt_seq),
+        .tx_axis_tdata  (buf_tx_axis_tdata),
+        .tx_axis_tkeep  (buf_tx_axis_tkeep),
+        .tx_axis_tvalid (buf_tx_axis_tvalid),
+        .tx_axis_tready (buf_tx_axis_tready),
+        .tx_axis_tlast  (buf_tx_axis_tlast),
+        .tx_axis_tuser  (buf_tx_axis_tuser),
+        .tx_pkt_done    (buf_tx_pkt_done),
 
         .tx_udp_hdr_valid(tx_udp_hdr_valid),
         .tx_udp_hdr_ready(tx_udp_hdr_ready),
@@ -262,28 +337,32 @@ module ludp_protocol #(
         .seq_num(seq_num_reg),
         .credit_limit(credit_limit_reg),
         .f2h_tx_enabled(f2h_tx_enabled_reg),
-        .tx_data_done(tx_data_done),
 
         .rx_src_ip(rx_src_ip),
         .rx_src_port(rx_src_port),
 
+        .cmd_start_req(rx_cmd_start_req),
+
+        .retx_axis_tdata (buf_retx_axis_tdata),
+        .retx_axis_tkeep (buf_retx_axis_tkeep),
+        .retx_axis_tvalid(buf_retx_axis_tvalid),
+        .retx_axis_tready(buf_retx_axis_tready),
+        .retx_axis_tlast (buf_retx_axis_tlast),
+        .retx_axis_tuser (buf_retx_axis_tuser),
+        .retx_pkt_size   (buf_retx_pkt_size),
+        .retx_found      (buf_retx_found),
+        .retx_seq_out    (buf_retx_seq_out),
+
         .last_payload_size(last_payload_size)
     );
 
-    // ================================================================
-    // Shared register management
-    // Sequence number and credit follow TCP RFC 793 wrap-around semantics:
-    //   - 32-bit unsigned counters naturally wrap: 0xFFFFFFFF + 1 = 0
-    //   - All comparisons use signed subtraction: $signed(a - b) > 0 means "a is ahead of b"
-    //   - CMD_START resets both counters, eliminating any wrap ambiguity
-    // ================================================================
     always_ff @(posedge clk) begin
         if (rst) begin
             seq_num_reg       <= 0;
-            credit_limit_reg    <= 0;
-            f2h_tx_enabled_reg  <= 1'b0;
+            credit_limit_reg  <= 0;
+            f2h_tx_enabled_reg <= 1'b0;
             packets_sent_reg  <= 0;
-            resp_ongoing_reg    <= 1'b0;
+            resp_ongoing_reg  <= 1'b0;
             resp_opcode_reg   <= 16'h0;
             resp_cmd_id_reg   <= 32'h0;
             resp_status_reg   <= 8'h0;
@@ -293,8 +372,7 @@ module ludp_protocol #(
             if (tx_resp_done) begin
                 resp_ongoing_reg <= 1'b0;
             end
-            if (tx_data_done) begin
-                // Natural unsigned wrap-around: 0xFFFFFFFF + 1 = 0
+            if (buf_tx_pkt_done) begin
                 seq_num_reg      <= seq_num_reg + 1;
                 packets_sent_reg <= packets_sent_reg + 1;
             end
@@ -302,7 +380,7 @@ module ludp_protocol #(
             if (rx_cmd_start_req) begin
                 f2h_tx_enabled_reg <= 1'b1;
                 seq_num_reg      <= 0;
-                credit_limit_reg   <= 0;
+                credit_limit_reg <= 0;
             end
             if (rx_cmd_stop_req) begin
                 f2h_tx_enabled_reg <= 1'b0;
@@ -332,12 +410,11 @@ module ludp_protocol #(
         end
     end
 
-    // ================================================================
-    // Output assignments
-    // ================================================================
+    assign buf_tx_pkt_seq = seq_num_reg;
+
     assign tx_seq_num      = seq_num_reg;
     assign rx_credit_limit = credit_limit_reg;
-    assign f2h_tx_enabled    = f2h_tx_enabled_reg;
+    assign f2h_tx_enabled  = f2h_tx_enabled_reg;
     assign packets_sent    = packets_sent_reg;
     assign status_ready    = 1'b1;
 
