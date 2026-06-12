@@ -134,6 +134,25 @@ static void send_credit(uint32_t credit) {
     abs_credit = credit;
 }
 
+static void build_nack(uint8_t *buf, uint32_t seq) {
+    buf[0]  = LUDP_MAGIC & 0xFF;
+    buf[1]  = (LUDP_MAGIC >> 8) & 0xFF;
+    buf[2]  = PKT_NACK;
+    buf[3]  = 0;
+    buf[4]  = seq & 0xFF;
+    buf[5]  = (seq >> 8) & 0xFF;
+    buf[6]  = (seq >> 16) & 0xFF;
+    buf[7]  = (seq >> 24) & 0xFF;
+    buf[8]  = 0; buf[9] = 0; buf[10] = 0; buf[11] = 0;
+    buf[12] = 0; buf[13] = 0; buf[14] = 0; buf[15] = 0;
+}
+
+static void send_nack(uint32_t seq) {
+    uint8_t pkt[16];
+    build_nack(pkt, seq);
+    send_to_fpga(pkt, 16);
+}
+
 static int wait_for_cmd_ack(uint32_t cmd_id, int timeout_ms) {
     uint8_t buf[MAX_PKT_SIZE];
     struct sockaddr_in from_addr;
@@ -461,20 +480,37 @@ int main(int argc, char *argv[]) {
         }
 
         now = get_time_ms();
-        if (now - last_credit_time >= 100) {
-            build_credit(credit_pkt, abs_credit);
+        uint64_t data_gap_ms = now - last_data_time;
+        int credit_interval_ms = (data_gap_ms > 500) ? 10 : 100;
+        if (now - last_credit_time >= (uint64_t)credit_interval_ms) {
+            uint32_t new_credit = expected_seq + window_size;
+            build_credit(credit_pkt, new_credit);
             sendto(sock_fd, (const char *)credit_pkt, 16, 0,
                    (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
+            abs_credit = new_credit;
             last_credit_time = now;
         }
 
-        if (now - last_warn_time >= 2000 && now - last_data_time >= 2000) {
-            printf("[WARN] No data for %.1fs, resending credit=%u expected=%u\n",
-                   (now - last_data_time) / 1000.0, abs_credit, expected_seq);
+        if (data_gap_ms >= 200 && data_gap_ms < 5000) {
+            static uint64_t last_nack_time = 0;
+            if (now - last_nack_time >= 50) {
+                send_nack(expected_seq);
+                uint32_t new_credit = expected_seq + window_size;
+                build_credit(credit_pkt, new_credit);
+                sendto(sock_fd, (const char *)credit_pkt, 16, 0,
+                       (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
+                abs_credit = new_credit;
+                last_nack_time = now;
+            }
+        }
+
+        if (now - last_warn_time >= 2000 && data_gap_ms >= 2000) {
+            printf("[WARN] No data for %.1fs, credit=%u expected=%u seq_highest=%u\n",
+                   data_gap_ms / 1000.0, abs_credit, expected_seq, highest_seq);
             last_warn_time = now;
         }
 
-        if (now - last_data_time >= 5000 && continuous) {
+        if (data_gap_ms >= 5000 && continuous) {
             printf("[RECOVERY] No data for 5s, attempting FPGA reset...\n");
             send_cmd_wait_ack(CMD_STOP, "STOP(recovery)");
 
