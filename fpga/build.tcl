@@ -117,7 +117,8 @@ set SYN_FILES_ABS [list]
 foreach file $SYN_FILES {
     set abs_path [get_abs_path $file]
     if {![file exists $abs_path]} {
-        puts "WARNING: Source file not found: $abs_path"
+        puts "WARNING: Source file not found: $abs_path — skipping"
+        continue
     }
     lappend SYN_FILES_ABS $abs_path
 }
@@ -128,7 +129,8 @@ set XDC_FILES_ABS [list]
 foreach file $XDC_FILES {
     set abs_path [get_abs_path $file]
     if {![file exists $abs_path]} {
-        puts "WARNING: XDC file not found: $abs_path"
+        puts "WARNING: XDC file not found: $abs_path — skipping"
+        continue
     }
     lappend XDC_FILES_ABS $abs_path
 }
@@ -138,7 +140,8 @@ read_xdc $XDC_FILES_ABS
 foreach file $IP_TCL_FILES {
     set abs_path [get_abs_path $file]
     if {![file exists $abs_path]} {
-        puts "WARNING: IP TCL file not found: $abs_path"
+        puts "WARNING: IP TCL file not found: $abs_path — skipping"
+        continue
     }
     source $abs_path
 }
@@ -159,7 +162,8 @@ synth_design -top $FPGA_TOP -part $FPGA_PART
 foreach file $CONSTRAINT_TCL_FILES {
     set abs_path [file normalize [file join $initial_dir $file]]
     if {![file exists $abs_path]} {
-        puts "WARNING: Constraint TCL file not found: $abs_path"
+        puts "WARNING: Constraint TCL file not found: $abs_path — skipping"
+        continue
     }
     source $abs_path
 }
