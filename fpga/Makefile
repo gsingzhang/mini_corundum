@@ -11,7 +11,14 @@ SYN_FILES += rtl/eth_xcvr_phy_quad_wrapper.v
 SYN_FILES += rtl/debounce_switch.v
 SYN_FILES += rtl/sync_signal.v
 SYN_FILES += rtl/ludp_protocol.sv
+SYN_FILES += rtl/ludp_protocol_rx.sv
+SYN_FILES += rtl/ludp_protocol_tx.sv
+SYN_FILES += rtl/ludp_unified_buffer.sv
 SYN_FILES += rtl/icmp_echo_reply.sv
+SYN_FILES += rtl/taxi_axis_if.sv
+SYN_FILES += rtl/taxi_axis_arb_mux.sv
+SYN_FILES += rtl/taxi_arbiter.sv
+SYN_FILES += rtl/taxi_penc.sv
 SYN_FILES += lib/eth/rtl/eth_mac_10g_fifo.v
 SYN_FILES += lib/eth/rtl/eth_mac_10g.v
 SYN_FILES += lib/eth/rtl/axis_xgmii_rx_64.v
@@ -50,6 +57,9 @@ SYN_FILES += lib/eth/lib/axis/rtl/axis_fifo.v
 SYN_FILES += lib/eth/lib/axis/rtl/axis_async_fifo.v
 SYN_FILES += lib/eth/lib/axis/rtl/axis_async_fifo_adapter.v
 SYN_FILES += lib/eth/lib/axis/rtl/sync_reset.v
+
+# External library files (absolute path)
+SYN_FILES += /home/gxzhang/gx/prj/taxi/src/prim/rtl/taxi_ram_1r1w_1c.sv
 
 # XDC files
 XDC_FILES = fpga.xdc

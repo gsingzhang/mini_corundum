@@ -20,21 +20,62 @@ if ($args.Count -gt 0) {
     }
 }
 
-# Check if Vivado is available
+# Setup Vivado PATH if not already available
+$VivadoFound = $false
 try {
-    $VivadoVersion = vivado -version 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Error: Vivado not found in PATH. Please add Vivado to your system PATH or run this script from Vivado Tcl Console." -ForegroundColor Red
-        exit 1
-    }
-    if ($Mode -eq "build") {
-        Write-Host "Found Vivado, starting build (non-project mode)..." -ForegroundColor Green
-    } else {
-        Write-Host "Found Vivado, creating project..." -ForegroundColor Green
-    }
+    $null = Get-Command vivado -ErrorAction Stop
+    $VivadoFound = $true
 } catch {
-    Write-Host "Error: Could not execute Vivado. Please ensure Vivado is installed and in your PATH." -ForegroundColor Red
+    $VivadoFound = $false
+}
+
+if (-not $VivadoFound) {
+    # Try common Vivado installation locations on Windows
+    $VivadoCandidates = @(
+        "C:\Xilinx\Vivado\2025.2\bin"
+        "C:\Xilinx\Vivado\2024.2\bin"
+        "C:\Xilinx\Vivado\2024.1\bin"
+        "C:\Xilinx\Vivado\2023.2\bin"
+        "D:\Xilinx\Vivado\2025.2\bin"
+        "D:\Xilinx\Vivado\2024.2\bin"
+    )
+
+    # Also search Xilinx directory for any installed version
+    foreach ($drive in @("C:", "D:")) {
+        $xilinxDir = "$drive\Xilinx\Vivado"
+        if (Test-Path $xilinxDir) {
+            $versions = Get-ChildItem $xilinxDir -Directory | Sort-Object Name -Descending
+            foreach ($ver in $versions) {
+                $binDir = Join-Path $ver.FullName "bin"
+                if (Test-Path (Join-Path $binDir "vivado.bat")) {
+                    $VivadoCandidates = @($binDir) + $VivadoCandidates
+                    break
+                }
+            }
+        }
+    }
+
+    foreach ($candidate in $VivadoCandidates) {
+        $vivadoExe = Join-Path $candidate "vivado.bat"
+        if (Test-Path $vivadoExe) {
+            $env:PATH = "$candidate;$env:PATH"
+            Write-Host "Added Vivado to PATH: $candidate" -ForegroundColor Cyan
+            $VivadoFound = $true
+            break
+        }
+    }
+}
+
+if (-not $VivadoFound) {
+    Write-Host "Error: Vivado not found. Please add Vivado to your system PATH." -ForegroundColor Red
+    Write-Host "Example: `$env:PATH = 'C:\Xilinx\Vivado\<version>\bin;' + `$env:PATH" -ForegroundColor Yellow
     exit 1
+}
+
+if ($Mode -eq "build") {
+    Write-Host "Found Vivado, starting build (non-project mode)..." -ForegroundColor Green
+} else {
+    Write-Host "Found Vivado, creating project..." -ForegroundColor Green
 }
 
 # Run the appropriate TCL script
