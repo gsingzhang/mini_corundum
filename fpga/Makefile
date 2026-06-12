@@ -58,8 +58,8 @@ SYN_FILES += rtl/lib_axis/axis_async_fifo.v
 SYN_FILES += rtl/lib_axis/axis_async_fifo_adapter.v
 SYN_FILES += rtl/lib_axis/sync_reset.v
 
-# External library files (absolute path)
-SYN_FILES += /home/gxzhang/gx/prj/taxi/src/prim/rtl/taxi_ram_1r1w_1c.sv
+# Taxi RAM module (copied locally)
+SYN_FILES += rtl/taxi_prim/taxi_ram_1r1w_1c.sv
 
 # XDC files
 XDC_FILES = fpga.xdc

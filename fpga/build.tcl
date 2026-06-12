@@ -15,23 +15,11 @@ set BUILD_DIR [file normalize [file join $initial_dir "build"]]
 # mini_corundum root directory
 set mini_corundum_root [file normalize [file dirname $initial_dir]]
 
-# taxi library root directory (sibling to mini_corundum)
-set taxi_root [file normalize [file join [file dirname $mini_corundum_root] "taxi"]]
-
 # Verify paths
 puts "Script directory : $script_dir"
 puts "Working directory: $initial_dir"
 puts "Build directory  : $BUILD_DIR"
 puts "mini_corundum    : $mini_corundum_root"
-puts "taxi library     : $taxi_root"
-
-# Verify taxi RAM file exists
-set taxi_ram_file [file normalize [file join $taxi_root "src" "prim" "rtl" "taxi_ram_1r1w_1c.sv"]]
-if {![file exists $taxi_ram_file]} {
-    puts "WARNING: taxi_ram_1r1w_1c.sv not found at $taxi_ram_file"
-} else {
-    puts "taxi RAM file    : OK"
-}
 
 # Files for synthesis (relative to mini_corundum_root)
 set SYN_FILES [list \
@@ -50,6 +38,7 @@ set SYN_FILES [list \
     "rtl/taxi_axis_arb_mux.sv" \
     "rtl/taxi_arbiter.sv" \
     "rtl/taxi_penc.sv" \
+    "rtl/taxi_prim/taxi_ram_1r1w_1c.sv" \
     "rtl/lib_eth/eth_mac_10g_fifo.v" \
     "rtl/lib_eth/eth_mac_10g.v" \
     "rtl/lib_eth/axis_xgmii_rx_64.v" \
@@ -90,10 +79,7 @@ set SYN_FILES [list \
     "rtl/lib_axis/sync_reset.v" \
 ]
 
-# External library files (absolute path)
-set EXT_FILES [list \
-    $taxi_ram_file \
-]
+# External library files (copied locally)
 
 # XDC files (relative to mini_corundum_root)
 set XDC_FILES [list \
@@ -134,12 +120,6 @@ foreach file $SYN_FILES {
         puts "WARNING: Source file not found: $abs_path"
     }
     lappend SYN_FILES_ABS $abs_path
-}
-foreach file $EXT_FILES {
-    if {![file exists $file]} {
-        puts "WARNING: External file not found: $file"
-    }
-    lappend SYN_FILES_ABS $file
 }
 read_verilog $SYN_FILES_ABS
 
