@@ -222,14 +222,14 @@ module ludp_protocol #(
         .resp_ongoing(resp_ongoing_reg)
     );
 
-    ludp_unified_buffer #(
+    ludp_tx_buffer #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
         .MAX_PAYLOAD_BYTES(MAX_PAYLOAD_BYTES),
         .NUM_BLOCKS(NUM_BLOCKS),
         .MEM_ADDR_W(32),
         .MEM_SLOT_SIZE(MEM_SLOT_SIZE)
-    ) unified_buf_inst (
+    ) tx_buf_inst (
         .clk(clk),
         .rst(rst),
 

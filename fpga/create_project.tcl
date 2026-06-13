@@ -32,7 +32,7 @@ set SYN_FILES [list \
     "rtl/ludp_protocol.sv" \
     "rtl/ludp_protocol_rx.sv" \
     "rtl/ludp_protocol_tx.sv" \
-    "rtl/ludp_unified_buffer.sv" \
+    "rtl/ludp_tx_buffer.sv" \
     "rtl/icmp_echo_reply.sv" \
     "rtl/taxi_axis_if.sv" \
     "rtl/taxi_axis_arb_mux.sv" \
