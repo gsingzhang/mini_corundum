@@ -126,29 +126,37 @@ module ludp_protocol #(
     logic [31:0] rx_src_ip;
     logic [15:0] rx_src_port;
 
-    logic        buf_tx_pkt_ready;
-    logic [15:0] buf_tx_pkt_size;
-    logic        buf_tx_pkt_start;
-    logic [31:0] buf_tx_pkt_seq;
-    logic [DATA_WIDTH-1:0] buf_tx_axis_tdata;
-    logic [KEEP_WIDTH-1:0] buf_tx_axis_tkeep;
-    logic                  buf_tx_axis_tvalid;
-    logic                  buf_tx_axis_tready;
-    logic                  buf_tx_axis_tlast;
-    logic                  buf_tx_axis_tuser;
-    logic                  buf_tx_pkt_done;
+    // ======== Internal wires: Scheduler <-> DMA ==============================
+    logic                  sch_dma_rd_req;
+    logic [31:0]           sch_dma_rd_base_addr;
+    logic [15:0]           sch_dma_rd_total_beats;
+    logic                  dma_rd_busy;
+    logic                  dma_rd_done;
 
-    logic [DATA_WIDTH-1:0] buf_retx_axis_tdata;
-    logic [KEEP_WIDTH-1:0] buf_retx_axis_tkeep;
-    logic                  buf_retx_axis_tvalid;
-    logic                  buf_retx_axis_tready;
-    logic                  buf_retx_axis_tlast;
-    logic                  buf_retx_axis_tuser;
-    logic [15:0]           buf_retx_pkt_size;
-    logic                  buf_retx_found;
-    logic                  buf_retx_not_found;
-    logic [31:0]           buf_retx_seq_out;
+    logic [31:0]           sch_dma_wr_base_addr;
+    logic                  sch_dma_wr_enable;
+    logic                  dma_wr_block_done;
 
+    // ======== Internal wires: DMA -> Protocol TX =============================
+    logic [DATA_WIDTH-1:0] dma_data_out_tdata;
+    logic [KEEP_WIDTH-1:0] dma_data_out_tkeep;
+    logic                  dma_data_out_tvalid;
+    logic                  dma_data_out_tready;
+    logic                  dma_data_out_tlast;
+    logic                  dma_data_out_tuser;
+    logic                  dma_data_out_done;
+
+    // ======== Internal wires: Scheduler -> Protocol TX =======================
+    logic        sch_tx_pkt_ready;
+    logic        sch_tx_pkt_start;
+    logic [31:0] sch_tx_pkt_seq;
+    logic        sch_tx_pkt_done;
+    logic        sch_retx_found;
+    logic [15:0] sch_rd_pkt_size;
+    logic [31:0] sch_rd_pkt_seq;
+    logic        sch_rd_is_retx;
+
+    // ======== RX Instance ====================================================
     ludp_protocol_rx #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
@@ -222,49 +230,81 @@ module ludp_protocol #(
         .resp_ongoing(resp_ongoing_reg)
     );
 
-    ludp_tx_buffer #(
+    // ======== Scheduler Instance =============================================
+    ludp_tx_scheduler #(
+        .NUM_BLOCKS(NUM_BLOCKS),
+        .KEEP_WIDTH(KEEP_WIDTH),
+        .MEM_ADDR_W(32),
+        .MEM_SLOT_SIZE(MEM_SLOT_SIZE)
+    ) scheduler_inst (
+        .clk(clk),
+        .rst(rst),
+        .clear(rx_cmd_start_req),
+
+        .dma_wr_enable   (sch_dma_wr_enable),
+        .dma_wr_block_done(dma_wr_block_done),
+        .dma_pkt_size    (dma_pkt_size),
+
+        .tx_pkt_ready   (sch_tx_pkt_ready),
+        .tx_pkt_start   (sch_tx_pkt_start),
+        .tx_pkt_seq     (sch_tx_pkt_seq),
+        .tx_pkt_done    (sch_tx_pkt_done),
+
+        .retx_req       (rx_retx_req),
+        .retx_seq       (rx_retx_seq),
+        .retx_found     (sch_retx_found),
+
+        .rd_pkt_size    (sch_rd_pkt_size),
+        .rd_pkt_seq     (sch_rd_pkt_seq),
+
+        .dma_rd_req        (sch_dma_rd_req),
+        .dma_rd_base_addr  (sch_dma_rd_base_addr),
+        .dma_rd_total_beats(sch_dma_rd_total_beats),
+        .dma_rd_busy       (dma_rd_busy),
+        .dma_rd_done       (dma_rd_done),
+
+        .dma_wr_base_addr  (sch_dma_wr_base_addr),
+
+        .rd_is_retx        (sch_rd_is_retx)
+    );
+
+    // ======== DMA Instance ===================================================
+    assign dma_axis_tready = sch_dma_wr_enable;
+
+    ludp_tx_dma #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
         .MAX_PAYLOAD_BYTES(MAX_PAYLOAD_BYTES),
-        .NUM_BLOCKS(NUM_BLOCKS),
         .MEM_ADDR_W(32),
         .MEM_SLOT_SIZE(MEM_SLOT_SIZE)
-    ) tx_buf_inst (
+    ) dma_inst (
         .clk(clk),
         .rst(rst),
+        .clear(rx_cmd_start_req),
 
         .dma_axis_tdata (dma_axis_tdata),
         .dma_axis_tkeep (dma_axis_tkeep),
         .dma_axis_tvalid(dma_axis_tvalid),
-        .dma_axis_tready(dma_axis_tready),
         .dma_axis_tlast (dma_axis_tlast),
         .dma_axis_tuser (dma_axis_tuser),
         .dma_pkt_size   (dma_pkt_size),
 
-        .tx_pkt_ready   (buf_tx_pkt_ready),
-        .tx_pkt_size    (buf_tx_pkt_size),
-        .tx_pkt_start   (buf_tx_pkt_start),
-        .tx_pkt_seq     (buf_tx_pkt_seq),
-        .tx_axis_tdata  (buf_tx_axis_tdata),
-        .tx_axis_tkeep  (buf_tx_axis_tkeep),
-        .tx_axis_tvalid (buf_tx_axis_tvalid),
-        .tx_axis_tready (buf_tx_axis_tready),
-        .tx_axis_tlast  (buf_tx_axis_tlast),
-        .tx_axis_tuser  (buf_tx_axis_tuser),
-        .tx_pkt_done    (buf_tx_pkt_done),
+        .wr_base_addr  (sch_dma_wr_base_addr),
+        .wr_enable     (sch_dma_wr_enable),
+        .dma_wr_block_done(dma_wr_block_done),
 
-        .retx_req       (rx_retx_req),
-        .retx_seq       (rx_retx_seq),
-        .retx_found     (buf_retx_found),
-        .retx_not_found (buf_retx_not_found),
-        .retx_seq_out   (buf_retx_seq_out),
-        .retx_axis_tdata (buf_retx_axis_tdata),
-        .retx_axis_tkeep (buf_retx_axis_tkeep),
-        .retx_axis_tvalid(buf_retx_axis_tvalid),
-        .retx_axis_tready(buf_retx_axis_tready),
-        .retx_axis_tlast (buf_retx_axis_tlast),
-        .retx_axis_tuser (buf_retx_axis_tuser),
-        .retx_pkt_size  (buf_retx_pkt_size),
+        .rd_req        (sch_dma_rd_req),
+        .rd_base_addr  (sch_dma_rd_base_addr),
+        .rd_total_beats(sch_dma_rd_total_beats),
+        .rd_busy       (dma_rd_busy),
+
+        .data_out_tdata (dma_data_out_tdata),
+        .data_out_tkeep (dma_data_out_tkeep),
+        .data_out_tvalid(dma_data_out_tvalid),
+        .data_out_tready(dma_data_out_tready),
+        .data_out_tlast (dma_data_out_tlast),
+        .data_out_tuser (dma_data_out_tuser),
+        .data_out_done  (dma_rd_done),
 
         .mem_wr_addr  (retx_mem_wr_addr),
         .mem_wr_data  (retx_mem_wr_data),
@@ -276,11 +316,10 @@ module ludp_protocol #(
         .mem_rd_valid   (retx_mem_rd_valid),
         .mem_rd_ready   (retx_mem_rd_ready),
         .mem_rd_data    (retx_mem_rd_data),
-        .mem_rd_valid_in(retx_mem_rd_valid_in),
-
-        .clear(rx_cmd_start_req)
+        .mem_rd_valid_in(retx_mem_rd_valid_in)
     );
 
+    // ======== Protocol TX Instance ===========================================
     ludp_protocol_tx #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
@@ -295,17 +334,21 @@ module ludp_protocol #(
         .host_ip(host_ip),
         .udp_port(udp_port),
 
-        .tx_pkt_ready   (buf_tx_pkt_ready),
-        .tx_pkt_size    (buf_tx_pkt_size),
-        .tx_pkt_start   (buf_tx_pkt_start),
-        .tx_pkt_seq     (buf_tx_pkt_seq),
-        .tx_axis_tdata  (buf_tx_axis_tdata),
-        .tx_axis_tkeep  (buf_tx_axis_tkeep),
-        .tx_axis_tvalid (buf_tx_axis_tvalid),
-        .tx_axis_tready (buf_tx_axis_tready),
-        .tx_axis_tlast  (buf_tx_axis_tlast),
-        .tx_axis_tuser  (buf_tx_axis_tuser),
-        .tx_pkt_done    (buf_tx_pkt_done),
+        .data_in_tdata (dma_data_out_tdata),
+        .data_in_tkeep (dma_data_out_tkeep),
+        .data_in_tvalid(dma_data_out_tvalid),
+        .data_in_tready(dma_data_out_tready),
+        .data_in_tlast (dma_data_out_tlast),
+        .data_in_tuser (dma_data_out_tuser),
+        .data_in_done  (dma_rd_done),
+
+        .tx_pkt_ready   (sch_tx_pkt_ready),
+        .tx_pkt_start   (sch_tx_pkt_start),
+        .tx_pkt_seq     (sch_tx_pkt_seq),
+        .rd_is_retx     (sch_rd_is_retx),
+        .retx_found     (sch_retx_found),
+        .rd_pkt_size    (sch_rd_pkt_size),
+        .rd_pkt_seq     (sch_rd_pkt_seq),
 
         .tx_udp_hdr_valid(tx_udp_hdr_valid),
         .tx_udp_hdr_ready(tx_udp_hdr_ready),
@@ -343,19 +386,10 @@ module ludp_protocol #(
 
         .cmd_start_req(rx_cmd_start_req),
 
-        .retx_axis_tdata (buf_retx_axis_tdata),
-        .retx_axis_tkeep (buf_retx_axis_tkeep),
-        .retx_axis_tvalid(buf_retx_axis_tvalid),
-        .retx_axis_tready(buf_retx_axis_tready),
-        .retx_axis_tlast (buf_retx_axis_tlast),
-        .retx_axis_tuser (buf_retx_axis_tuser),
-        .retx_pkt_size   (buf_retx_pkt_size),
-        .retx_found      (buf_retx_found),
-        .retx_seq_out    (buf_retx_seq_out),
-
         .last_payload_size(last_payload_size)
     );
 
+    // ======== Global state management ========================================
     always_ff @(posedge clk) begin
         if (rst) begin
             seq_num_reg       <= 0;
@@ -372,7 +406,7 @@ module ludp_protocol #(
             if (tx_resp_done) begin
                 resp_ongoing_reg <= 1'b0;
             end
-            if (buf_tx_pkt_done) begin
+            if (sch_tx_pkt_done) begin
                 seq_num_reg      <= seq_num_reg + 1;
                 packets_sent_reg <= packets_sent_reg + 1;
             end
@@ -410,7 +444,7 @@ module ludp_protocol #(
         end
     end
 
-    assign buf_tx_pkt_seq = seq_num_reg;
+    assign sch_tx_pkt_seq = seq_num_reg;
 
     assign tx_seq_num      = seq_num_reg;
     assign rx_credit_limit = credit_limit_reg;

@@ -5,7 +5,8 @@
 ../rtl/ludp_protocol.sv
 ../rtl/ludp_protocol_rx.sv
 ../rtl/ludp_protocol_tx.sv
-../rtl/ludp_tx_buffer.sv
+../rtl/ludp_tx_dma.sv
+../rtl/ludp_tx_scheduler.sv
 ../rtl/icmp_echo_reply.sv
 ../rtl/fpga_core.v
 ../rtl/taxi_prim/taxi_ram_1r1w_1c.sv
