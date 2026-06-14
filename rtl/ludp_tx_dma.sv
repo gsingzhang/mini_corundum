@@ -5,11 +5,11 @@
 // Pure DMA engine that reads/writes an external RAM.
 // NO knowledge of TX vs RETX — the scheduler tells it which address to read.
 //
-// Write path: receives wr_base_addr, computes beat addresses, drives RAM
-// write port from the DMA AXI-Stream input.
+// Write path: receives wr_desc_base_addr, computes beat addresses, drives RAM
+// write port from the wr_axis AXI-Stream input.
 //
-// Read path: receives rd_req + rd_base_addr + rd_total_beats from the
-// scheduler, reads data from RAM, outputs on data_out AXI-Stream.
+// Read path: receives rd_desc_req + rd_desc_base_addr + rd_desc_total_beats
+// from the scheduler, reads data from RAM, outputs on rd_axis AXI-Stream.
 // Uses fully-pipelined prefetch for zero-bubble throughput.
 //
 // Pipeline architecture (read path):
@@ -26,33 +26,32 @@ module ludp_tx_dma #(
     input  wire        rst,
     input  wire        clear,
 
-    // ---- DMA write port (AXI-Stream, from DMA controller) -------------------
-    input  wire [DATA_WIDTH-1:0] dma_axis_tdata,
-    input  wire [KEEP_WIDTH-1:0] dma_axis_tkeep,
-    input  wire                  dma_axis_tvalid,
-    input  wire                  dma_axis_tlast,
-    input  wire                  dma_axis_tuser,
-    input  wire [15:0]           dma_pkt_size,
+    // ---- Write channel (AXI-Stream input, from DMA controller) ---------------
+    input  wire [DATA_WIDTH-1:0] wr_axis_tdata,
+    input  wire [KEEP_WIDTH-1:0] wr_axis_tkeep,
+    input  wire                  wr_axis_tvalid,
+    input  wire                  wr_axis_tlast,
+    input  wire                  wr_axis_tuser,
 
-    // ---- Write address (from scheduler: which block to write into) ----------
-    input  wire [MEM_ADDR_W-1:0] wr_base_addr,
-    input  wire                  wr_enable,       // scheduler allows write (block is EMPTY)
-    output logic                 dma_wr_block_done, // 1-cycle pulse: last beat written
+    // ---- Write descriptor (from scheduler) ----------------------------------
+    input  wire [MEM_ADDR_W-1:0] wr_desc_base_addr,
+    input  wire                  wr_desc_enable,
+    output logic                 wr_desc_done,
 
-    // ---- Read request (from scheduler: start reading a block) ---------------
-    input  wire                  rd_req,
-    input  wire [MEM_ADDR_W-1:0] rd_base_addr,
-    input  wire [15:0]           rd_total_beats,
-    output logic                 rd_busy,
+    // ---- Read descriptor (from scheduler) -----------------------------------
+    input  wire                  rd_desc_req,
+    input  wire [MEM_ADDR_W-1:0] rd_desc_base_addr,
+    input  wire [15:0]           rd_desc_total_beats,
+    output logic                 rd_desc_busy,
 
-    // ---- Data output (single AXI-Stream, no TX/RETX distinction) ------------
-    output logic [DATA_WIDTH-1:0] data_out_tdata,
-    output logic [KEEP_WIDTH-1:0] data_out_tkeep,
-    output logic                  data_out_tvalid,
-    input  wire                   data_out_tready,
-    output logic                  data_out_tlast,
-    output logic                  data_out_tuser,
-    output logic                  data_out_done,
+    // ---- Read channel (AXI-Stream output, no TX/RETX distinction) -----------
+    output logic [DATA_WIDTH-1:0] rd_axis_tdata,
+    output logic [KEEP_WIDTH-1:0] rd_axis_tkeep,
+    output logic                  rd_axis_tvalid,
+    input  wire                   rd_axis_tready,
+    output logic                  rd_axis_tlast,
+    output logic                  rd_axis_tuser,
+    output logic                  rd_axis_done,
 
     // ---- External RAM (1R1W) port -------------------------------------------
     output logic [MEM_ADDR_W-1:0] mem_wr_addr,
@@ -74,17 +73,17 @@ module ludp_tx_dma #(
     // ======== DMA Write Side =================================================
     logic [BEAT_A_W-1:0] dma_beat_idx_reg;
 
-    wire dma_wr_beat = dma_axis_tvalid && wr_enable;
-    assign dma_wr_block_done = dma_wr_beat && dma_axis_tlast;
+    wire dma_wr_beat = wr_axis_tvalid && wr_desc_enable;
+    assign wr_desc_done = dma_wr_beat && wr_axis_tlast;
 
-    wire [MEM_ADDR_W-1:0] dma_beat_addr = wr_base_addr +
+    wire [MEM_ADDR_W-1:0] dma_beat_addr = wr_desc_base_addr +
                                            (MEM_ADDR_W'(dma_beat_idx_reg) << BEAT_BYTE_W);
 
     always_ff @(posedge clk) begin
         if (rst || clear) begin
             dma_beat_idx_reg <= '0;
         end else if (dma_wr_beat) begin
-            if (dma_axis_tlast)
+            if (wr_axis_tlast)
                 dma_beat_idx_reg <= '0;
             else
                 dma_beat_idx_reg <= dma_beat_idx_reg + 1'b1;
@@ -117,7 +116,7 @@ module ludp_tx_dma #(
     wire rd_in_pipe    = (rd_state_reg == RD_READ) || (rd_state_reg == RD_WAIT);
 
     wire rd_consume = (rd_state_reg == RD_READ) && rd_data_valid_reg &&
-                      data_out_tvalid && data_out_tready;
+                      rd_axis_tvalid && rd_axis_tready;
 
     wire rd_flight_complete = rd_prefetch_issued_reg && mem_rd_valid_in;
 
@@ -158,10 +157,10 @@ module ludp_tx_dma #(
                     rd_data_valid_reg      <= 1'b0;
                     rd_prefetch_issued_reg <= 1'b0;
                     rd_prefetch_valid_reg  <= 1'b0;
-                    if (rd_req) begin
+                    if (rd_desc_req) begin
                         rd_state_reg       <= RD_REQ;
-                        rd_base_addr_reg   <= rd_base_addr;
-                        rd_total_beats_reg <= rd_total_beats;
+                        rd_base_addr_reg   <= rd_desc_base_addr;
+                        rd_total_beats_reg <= rd_desc_total_beats;
                     end
                 end
 
@@ -229,18 +228,18 @@ module ludp_tx_dma #(
     end
 
     // ======== Output Assignments =============================================
-    assign rd_busy = (rd_state_reg != RD_IDLE);
+    assign rd_desc_busy = (rd_state_reg != RD_IDLE);
 
-    assign data_out_tdata  = rd_data_reg;
-    assign data_out_tkeep  = {KEEP_WIDTH{1'b1}};
-    assign data_out_tlast  = rd_last_beat;
-    assign data_out_tvalid = (rd_state_reg == RD_READ) && rd_data_valid_reg;
-    assign data_out_tuser  = 1'b0;
-    assign data_out_done   = (rd_state_reg == RD_READ) && rd_consume && rd_last_beat;
+    assign rd_axis_tdata  = rd_data_reg;
+    assign rd_axis_tkeep  = {KEEP_WIDTH{1'b1}};
+    assign rd_axis_tlast  = rd_last_beat;
+    assign rd_axis_tvalid = (rd_state_reg == RD_READ) && rd_data_valid_reg;
+    assign rd_axis_tuser  = 1'b0;
+    assign rd_axis_done   = (rd_state_reg == RD_READ) && rd_consume && rd_last_beat;
 
     assign mem_wr_addr  = dma_beat_addr;
-    assign mem_wr_data  = dma_axis_tdata;
-    assign mem_wr_strb  = dma_axis_tkeep;
+    assign mem_wr_data  = wr_axis_tdata;
+    assign mem_wr_strb  = wr_axis_tkeep;
     assign mem_wr_valid = dma_wr_beat;
 
     assign mem_rd_addr  = rd_read_addr;

@@ -135,16 +135,16 @@ module ludp_protocol #(
 
     logic [31:0]           sch_dma_wr_base_addr;
     logic                  sch_dma_wr_enable;
-    logic                  dma_wr_block_done;
+    logic                  wr_desc_done;
 
     // ======== Internal wires: DMA -> Protocol TX =============================
-    logic [DATA_WIDTH-1:0] dma_data_out_tdata;
-    logic [KEEP_WIDTH-1:0] dma_data_out_tkeep;
-    logic                  dma_data_out_tvalid;
-    logic                  dma_data_out_tready;
-    logic                  dma_data_out_tlast;
-    logic                  dma_data_out_tuser;
-    logic                  dma_data_out_done;
+    logic [DATA_WIDTH-1:0] dma_rd_axis_tdata;
+    logic [KEEP_WIDTH-1:0] dma_rd_axis_tkeep;
+    logic                  dma_rd_axis_tvalid;
+    logic                  dma_rd_axis_tready;
+    logic                  dma_rd_axis_tlast;
+    logic                  dma_rd_axis_tuser;
+    logic                  dma_rd_axis_done;
 
     // ======== Internal wires: Scheduler -> Protocol TX =======================
     logic        sch_tx_pkt_ready;
@@ -242,7 +242,7 @@ module ludp_protocol #(
         .clear(rx_cmd_start_req),
 
         .dma_wr_enable   (sch_dma_wr_enable),
-        .dma_wr_block_done(dma_wr_block_done),
+        .dma_wr_block_done(wr_desc_done),
         .dma_pkt_size    (dma_pkt_size),
 
         .tx_pkt_ready   (sch_tx_pkt_ready),
@@ -282,29 +282,28 @@ module ludp_protocol #(
         .rst(rst),
         .clear(rx_cmd_start_req),
 
-        .dma_axis_tdata (dma_axis_tdata),
-        .dma_axis_tkeep (dma_axis_tkeep),
-        .dma_axis_tvalid(dma_axis_tvalid),
-        .dma_axis_tlast (dma_axis_tlast),
-        .dma_axis_tuser (dma_axis_tuser),
-        .dma_pkt_size   (dma_pkt_size),
+        .wr_axis_tdata (dma_axis_tdata),
+        .wr_axis_tkeep (dma_axis_tkeep),
+        .wr_axis_tvalid(dma_axis_tvalid),
+        .wr_axis_tlast (dma_axis_tlast),
+        .wr_axis_tuser (dma_axis_tuser),
 
-        .wr_base_addr  (sch_dma_wr_base_addr),
-        .wr_enable     (sch_dma_wr_enable),
-        .dma_wr_block_done(dma_wr_block_done),
+        .wr_desc_base_addr  (sch_dma_wr_base_addr),
+        .wr_desc_enable     (sch_dma_wr_enable),
+        .wr_desc_done(wr_desc_done),
 
-        .rd_req        (sch_dma_rd_req),
-        .rd_base_addr  (sch_dma_rd_base_addr),
-        .rd_total_beats(sch_dma_rd_total_beats),
-        .rd_busy       (dma_rd_busy),
+        .rd_desc_req        (sch_dma_rd_req),
+        .rd_desc_base_addr  (sch_dma_rd_base_addr),
+        .rd_desc_total_beats(sch_dma_rd_total_beats),
+        .rd_desc_busy       (dma_rd_busy),
 
-        .data_out_tdata (dma_data_out_tdata),
-        .data_out_tkeep (dma_data_out_tkeep),
-        .data_out_tvalid(dma_data_out_tvalid),
-        .data_out_tready(dma_data_out_tready),
-        .data_out_tlast (dma_data_out_tlast),
-        .data_out_tuser (dma_data_out_tuser),
-        .data_out_done  (dma_rd_done),
+        .rd_axis_tdata (dma_rd_axis_tdata),
+        .rd_axis_tkeep (dma_rd_axis_tkeep),
+        .rd_axis_tvalid(dma_rd_axis_tvalid),
+        .rd_axis_tready(dma_rd_axis_tready),
+        .rd_axis_tlast (dma_rd_axis_tlast),
+        .rd_axis_tuser (dma_rd_axis_tuser),
+        .rd_axis_done  (dma_rd_done),
 
         .mem_wr_addr  (retx_mem_wr_addr),
         .mem_wr_data  (retx_mem_wr_data),
@@ -334,12 +333,12 @@ module ludp_protocol #(
         .host_ip(host_ip),
         .udp_port(udp_port),
 
-        .data_in_tdata (dma_data_out_tdata),
-        .data_in_tkeep (dma_data_out_tkeep),
-        .data_in_tvalid(dma_data_out_tvalid),
-        .data_in_tready(dma_data_out_tready),
-        .data_in_tlast (dma_data_out_tlast),
-        .data_in_tuser (dma_data_out_tuser),
+        .data_in_tdata (dma_rd_axis_tdata),
+        .data_in_tkeep (dma_rd_axis_tkeep),
+        .data_in_tvalid(dma_rd_axis_tvalid),
+        .data_in_tready(dma_rd_axis_tready),
+        .data_in_tlast (dma_rd_axis_tlast),
+        .data_in_tuser (dma_rd_axis_tuser),
         .data_in_done  (dma_rd_done),
 
         .tx_pkt_ready   (sch_tx_pkt_ready),
