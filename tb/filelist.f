@@ -48,5 +48,4 @@
 ../rtl/lib_axis/axis_async_fifo.v
 ../rtl/lib_axis/axis_async_fifo_adapter.v
 ../rtl/lib_axis/sync_reset.v
-../rtl/lib_axis/axis_arb_mux.v
 tb_fpga_core.v

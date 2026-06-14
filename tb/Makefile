@@ -81,7 +81,6 @@ VERILOG_SOURCES += $(LIB_AXIS_DIR)/axis_fifo.v
 VERILOG_SOURCES += $(LIB_AXIS_DIR)/axis_async_fifo.v
 VERILOG_SOURCES += $(LIB_AXIS_DIR)/axis_async_fifo_adapter.v
 VERILOG_SOURCES += $(LIB_AXIS_DIR)/sync_reset.v
-VERILOG_SOURCES += $(LIB_AXIS_DIR)/axis_arb_mux.v
 
 # Testbench
 VERILOG_SOURCES += $(TB_TOP).v

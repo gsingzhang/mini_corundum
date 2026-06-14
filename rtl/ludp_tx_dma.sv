@@ -30,6 +30,7 @@ module ludp_tx_dma #(
     input  wire [DATA_WIDTH-1:0] wr_axis_tdata,
     input  wire [KEEP_WIDTH-1:0] wr_axis_tkeep,
     input  wire                  wr_axis_tvalid,
+    output logic                 wr_axis_tready,
     input  wire                  wr_axis_tlast,
     input  wire                  wr_axis_tuser,
 
@@ -37,12 +38,6 @@ module ludp_tx_dma #(
     input  wire [MEM_ADDR_W-1:0] wr_desc_base_addr,
     input  wire                  wr_desc_enable,
     output logic                 wr_done,
-
-    // ---- Read descriptor (from scheduler) -----------------------------------
-    input  wire                  rd_desc_req,
-    input  wire [MEM_ADDR_W-1:0] rd_desc_base_addr,
-    input  wire [15:0]           rd_desc_total_beats,
-    output logic                 rd_busy,
 
     // ---- Read channel (AXI-Stream output, no TX/RETX distinction) -----------
     output logic [DATA_WIDTH-1:0] rd_axis_tdata,
@@ -52,6 +47,12 @@ module ludp_tx_dma #(
     output logic                  rd_axis_tlast,
     output logic                  rd_axis_tuser,
     output logic                  rd_done,
+
+    // ---- Read descriptor (from scheduler) -----------------------------------
+    input  wire                  rd_desc_req,
+    input  wire [MEM_ADDR_W-1:0] rd_desc_base_addr,
+    input  wire [15:0]           rd_desc_total_beats,
+    output logic                 rd_busy,
 
     // ---- External RAM (1R1W) port -------------------------------------------
     output logic [MEM_ADDR_W-1:0] mem_wr_addr,
@@ -75,6 +76,7 @@ module ludp_tx_dma #(
 
     wire dma_wr_beat = wr_axis_tvalid && wr_desc_enable;
     assign wr_done = dma_wr_beat && wr_axis_tlast;
+    assign wr_axis_tready = wr_desc_enable;
 
     wire [MEM_ADDR_W-1:0] dma_beat_addr = wr_desc_base_addr +
                                            (MEM_ADDR_W'(dma_beat_idx_reg) << BEAT_BYTE_W);
@@ -93,8 +95,8 @@ module ludp_tx_dma #(
     // ======== Read Pipeline ==================================================
     typedef enum logic [1:0] {
         RD_IDLE,
-        RD_REQ,
-        RD_WAIT,
+        RD_WAIT_READY,
+        RD_WAIT_DATA,
         RD_READ
     } rd_state_t;
 
@@ -113,7 +115,7 @@ module ludp_tx_dma #(
     // ======== Pipeline Condition Wires =======================================
     wire rd_last_beat  = (rd_beat_idx_reg + 1 >= rd_total_beats_reg);
     wire rd_more_beats = (rd_read_beat_reg < rd_total_beats_reg);
-    wire rd_in_pipe    = (rd_state_reg == RD_READ) || (rd_state_reg == RD_WAIT);
+    wire rd_in_pipe    = (rd_state_reg == RD_READ) || (rd_state_reg == RD_WAIT_DATA);
 
     wire rd_consume = (rd_state_reg == RD_READ) && rd_data_valid_reg &&
                       rd_axis_tvalid && rd_axis_tready;
@@ -131,8 +133,10 @@ module ludp_tx_dma #(
 
     wire rd_read_accepted = mem_rd_valid && mem_rd_ready;
 
-    wire [MEM_ADDR_W-1:0] rd_read_addr = rd_base_addr_reg +
-                                          (MEM_ADDR_W'(rd_read_beat_reg) << BEAT_BYTE_W);
+    wire rd_first_read = (rd_state_reg == RD_IDLE) && rd_desc_req && mem_rd_ready;
+    wire [MEM_ADDR_W-1:0] rd_read_addr = rd_first_read
+                                          ? rd_desc_base_addr
+                                          : rd_base_addr_reg + (MEM_ADDR_W'(rd_read_beat_reg) << BEAT_BYTE_W);
 
     // ======== Sequential Logic ===============================================
     always_ff @(posedge clk) begin
@@ -158,18 +162,21 @@ module ludp_tx_dma #(
                     rd_prefetch_issued_reg <= 1'b0;
                     rd_prefetch_valid_reg  <= 1'b0;
                     if (rd_desc_req) begin
-                        rd_state_reg       <= RD_REQ;
                         rd_base_addr_reg   <= rd_desc_base_addr;
                         rd_total_beats_reg <= rd_desc_total_beats;
+                        if (mem_rd_ready)
+                            rd_state_reg <= RD_WAIT_DATA;
+                        else
+                            rd_state_reg <= RD_WAIT_READY;
                     end
                 end
 
-                RD_REQ: begin
+                RD_WAIT_READY: begin
                     if (mem_rd_ready)
-                        rd_state_reg <= RD_WAIT;
+                        rd_state_reg <= RD_WAIT_DATA;
                 end
 
-                RD_WAIT: begin
+                RD_WAIT_DATA: begin
                     if (mem_rd_valid_in || rd_prefetch_issued_reg) begin
                         rd_data_reg            <= mem_rd_data;
                         rd_data_valid_reg      <= 1'b1;
@@ -204,11 +211,14 @@ module ludp_tx_dma #(
                         end else if (rd_prefetch_issued_reg) begin
                             rd_data_valid_reg <= 1'b0;
                             rd_beat_idx_reg   <= rd_beat_idx_reg + 1'b1;
-                            rd_state_reg      <= RD_WAIT;
+                            rd_state_reg      <= RD_WAIT_DATA;
                         end else begin
                             rd_data_valid_reg <= 1'b0;
                             rd_beat_idx_reg   <= rd_beat_idx_reg + 1'b1;
-                            rd_state_reg      <= RD_REQ;
+                            if (mem_rd_ready)
+                                rd_state_reg <= RD_WAIT_DATA;
+                            else
+                                rd_state_reg <= RD_WAIT_READY;
                         end
                     end
                 end
@@ -243,6 +253,6 @@ module ludp_tx_dma #(
     assign mem_wr_valid = dma_wr_beat;
 
     assign mem_rd_addr  = rd_read_addr;
-    assign mem_rd_valid = (rd_state_reg == RD_REQ) || rd_issue_prefetch;
+    assign mem_rd_valid = (rd_state_reg == RD_WAIT_READY) || rd_issue_prefetch || rd_first_read;
 
 endmodule

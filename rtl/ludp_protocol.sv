@@ -269,7 +269,6 @@ module ludp_protocol #(
     );
 
     // ======== DMA Instance ===================================================
-    assign dma_axis_tready = sch_dma_wr_enable;
 
     ludp_tx_dma #(
         .DATA_WIDTH(DATA_WIDTH),
@@ -285,6 +284,7 @@ module ludp_protocol #(
         .wr_axis_tdata (dma_axis_tdata),
         .wr_axis_tkeep (dma_axis_tkeep),
         .wr_axis_tvalid(dma_axis_tvalid),
+        .wr_axis_tready(dma_axis_tready),
         .wr_axis_tlast (dma_axis_tlast),
         .wr_axis_tuser (dma_axis_tuser),
 
