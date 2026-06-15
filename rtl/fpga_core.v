@@ -278,37 +278,43 @@ wire        ludp_retx_mem_rd_ready;
 wire [63:0] ludp_retx_mem_rd_data;
 wire        ludp_retx_mem_rd_valid_in;
 
-// Test data generator for ultrasonic data simulation
-// Supports variable payload sizes from 8 bytes up to jumbo frames
-// Payload size is configurable via test_data_payload_size_reg (in bytes)
+// Test data generator with per-beat pattern for data integrity verification
+// Each 64-bit beat contains: {pkt_idx[15:0], beat_idx[15:0], 32'hA5A5A5A5}
+// This allows TB to verify: correct pkt, correct beat position, no data loss/duplication
 reg [63:0] test_data_reg = 0;
 reg        test_data_valid_reg = 0;
 reg        test_data_last_reg = 0;
 reg [15:0] test_data_count_reg = 0;
+reg [31:0] test_data_pkt_idx_reg = 0;
 reg        f2h_tx_enabled_dly = 0;
-reg [15:0] test_data_payload_size_reg = 8960;  // Jumbo frame payload (requires MTU>=9000)
+reg [15:0] test_data_payload_size_reg = 8960;
 wire       test_data_fifo_tready;
 
 always @(posedge clk) begin
     if (rst) begin
-        test_data_reg <= 64'h0;
+        test_data_reg <= {16'h0, 16'h0, 32'hA5A5A5A5};
         test_data_valid_reg <= 1'b0;
         test_data_last_reg <= 1'b0;
         test_data_count_reg <= 16'h0;
+        test_data_pkt_idx_reg <= 32'h0;
         f2h_tx_enabled_dly <= 1'b0;
-        test_data_payload_size_reg <= 8960;  // Jumbo frame payload
+        test_data_payload_size_reg <= 8960;
     end else begin
         f2h_tx_enabled_dly <= ludp_f2h_tx_enabled;
 
         if (ludp_f2h_tx_enabled) begin
             test_data_valid_reg <= 1'b1;
             if (test_data_valid_reg && test_data_fifo_tready) begin
-                test_data_reg <= {test_data_count_reg[7:0], 56'h0};
-                test_data_last_reg <= (test_data_count_reg == (test_data_payload_size_reg/8 - 1));
-                if (test_data_count_reg == (test_data_payload_size_reg/8 - 1))
+                if (test_data_count_reg == (test_data_payload_size_reg/8 - 1)) begin
                     test_data_count_reg <= 16'h0;
-                else
+                    test_data_pkt_idx_reg <= test_data_pkt_idx_reg + 32'd1;
+                    test_data_reg <= {test_data_pkt_idx_reg[15:0] + 16'd1, 16'h0, 32'hA5A5A5A5};
+                    test_data_last_reg <= 1'b0;
+                end else begin
                     test_data_count_reg <= test_data_count_reg + 1;
+                    test_data_reg <= {test_data_pkt_idx_reg[15:0], test_data_count_reg + 16'd1, 32'hA5A5A5A5};
+                    test_data_last_reg <= (test_data_count_reg + 16'd1 == (test_data_payload_size_reg/8 - 1));
+                end
             end
         end else begin
             test_data_valid_reg <= 1'b0;

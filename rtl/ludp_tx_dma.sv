@@ -101,6 +101,7 @@ module ludp_tx_dma #(
     } rd_state_t;
 
     rd_state_t rd_state_reg;
+    rd_state_t rd_state_prev;
     logic [MEM_ADDR_W-1:0] rd_base_addr_reg;
     logic [BEAT_A_W-1:0]   rd_beat_idx_reg;
     logic [BEAT_A_W-1:0]   rd_read_beat_reg;
@@ -151,23 +152,24 @@ module ludp_tx_dma #(
             rd_prefetch_valid_reg  <= 1'b0;
             rd_prefetch_data_reg   <= '0;
         end else begin
-            if (rd_read_accepted)
-                rd_read_beat_reg <= rd_read_beat_reg + 1'b1;
-
             case (rd_state_reg)
                 RD_IDLE: begin
                     rd_beat_idx_reg        <= '0;
-                    rd_read_beat_reg       <= '0;
                     rd_data_valid_reg      <= 1'b0;
                     rd_prefetch_issued_reg <= 1'b0;
                     rd_prefetch_valid_reg  <= 1'b0;
                     if (rd_desc_req) begin
                         rd_base_addr_reg   <= rd_desc_base_addr;
                         rd_total_beats_reg <= rd_desc_total_beats;
-                        if (mem_rd_ready)
-                            rd_state_reg <= RD_WAIT_DATA;
-                        else
-                            rd_state_reg <= RD_WAIT_READY;
+                        if (mem_rd_ready) begin
+                            rd_state_reg     <= RD_WAIT_DATA;
+                            rd_read_beat_reg <= 1;
+                        end else begin
+                            rd_state_reg     <= RD_WAIT_READY;
+                            rd_read_beat_reg <= '0;
+                        end
+                    end else begin
+                        rd_read_beat_reg <= '0;
                     end
                 end
 
@@ -234,6 +236,8 @@ module ludp_tx_dma #(
             if (rd_issue_prefetch) begin
                 rd_prefetch_issued_reg <= 1'b1;
             end
+            if (rd_read_accepted && rd_state_reg != RD_IDLE)
+                rd_read_beat_reg <= rd_read_beat_reg + 1'b1;
         end
     end
 
@@ -254,5 +258,17 @@ module ludp_tx_dma #(
 
     assign mem_rd_addr  = rd_read_addr;
     assign mem_rd_valid = (rd_state_reg == RD_WAIT_READY) || rd_issue_prefetch || rd_first_read;
+
+    always @(posedge clk) begin
+        if (rd_state_reg != RD_IDLE && rd_state_reg != rd_state_prev)
+            $display("[DMA_RD] %0t STATE %0s -> %0s beat_idx=%0d read_beat=%0d total=%0d data_v=%0b pf_issued=%0b pf_valid=%0b tvalid=%0b tready=%0b",
+                     $time, rd_state_prev.name, rd_state_reg.name,
+                     rd_beat_idx_reg, rd_read_beat_reg, rd_total_beats_reg,
+                     rd_data_valid_reg, rd_prefetch_issued_reg, rd_prefetch_valid_reg,
+                     rd_axis_tvalid, rd_axis_tready);
+    end
+
+    always_ff @(posedge clk)
+        rd_state_prev <= rd_state_reg;
 
 endmodule

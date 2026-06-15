@@ -224,4 +224,19 @@ module ludp_tx_scheduler #(
 
     assign tx_pkt_done = dma_rd_done && !sch_is_retx_reg;
 
+    always @(posedge clk) begin
+        if (dma_wr_block_done)
+            $display("[SCHED] %0t WR done blk=%0d -> READY wr_idx=%0d", $time, dma_wr_idx_reg, blk_next(dma_wr_idx_reg));
+        if (dma_rd_done)
+            $display("[SCHED] %0t RD done blk=%0d is_retx=%0b blk_state=[%0d,%0d,%0d] tx_rd_idx=%0d",
+                     $time, rd_blk_idx_reg, sch_is_retx_reg,
+                     blk_state[0], blk_state[1], blk_state[2], tx_rd_idx_reg);
+        if (dma_rd_req)
+            $display("[SCHED] %0t RD req blk=%0d addr=%08h beats=%0d busy=%0b",
+                     $time, sch_target_blk, dma_rd_base_addr, dma_rd_total_beats, dma_rd_busy);
+        if (tx_pkt_start && !dma_rd_req)
+            $display("[SCHED] %0t TX start but NO rd_req! sch_state=%0d can_issue=%0b rd_busy=%0b blk_rdy=%0b",
+                     $time, sch_state_reg, sch_can_issue, dma_rd_busy, (blk_state[tx_rd_idx_reg] == BLK_READY));
+    end
+
 endmodule

@@ -869,6 +869,73 @@ task verify_ludp_data;
             $display("[%0t] ERROR: IP destination mismatch: expected %08h, got %08h", $time, HOST_IP, ip_dst);
             error_count = error_count + 1;
         end else $display("[%0t] PASS: IP destination correct (%08h)", $time, ip_dst);
+
+        // Payload integrity verification from captured TX frame
+        begin : payload_check_block
+            integer num_beats;
+            integer beat_idx;
+            integer local_errors;
+            reg [63:0] payload_beat;
+            integer byte_offset;
+            reg [15:0] rx_pkt_idx;
+            reg [15:0] rx_beat_idx;
+            reg [31:0] rx_marker;
+
+            num_beats = rx_pay_len / 8;
+            local_errors = 0;
+
+            for (beat_idx = 0; beat_idx < num_beats; beat_idx = beat_idx + 1) begin
+                byte_offset = 58 + beat_idx * 8;
+                payload_beat[63:56] = get_tx_byte(byte_offset + 7);
+                payload_beat[55:48] = get_tx_byte(byte_offset + 6);
+                payload_beat[47:40] = get_tx_byte(byte_offset + 5);
+                payload_beat[39:32] = get_tx_byte(byte_offset + 4);
+                payload_beat[31:24] = get_tx_byte(byte_offset + 3);
+                payload_beat[23:16] = get_tx_byte(byte_offset + 2);
+                payload_beat[15:8]  = get_tx_byte(byte_offset + 1);
+                payload_beat[7:0]   = get_tx_byte(byte_offset);
+
+                rx_marker  = payload_beat[31:0];
+                rx_beat_idx = payload_beat[47:32];
+                rx_pkt_idx = payload_beat[63:48];
+
+                if (beat_idx < 3) begin
+                    $display("[%0t] DEBUG: beat %0d raw_bytes=%02h_%02h_%02h_%02h_%02h_%02h_%02h_%02h payload=%016h marker=%08h pkt=%04h beat=%04h",
+                             $time, beat_idx,
+                             get_tx_byte(byte_offset+7), get_tx_byte(byte_offset+6),
+                             get_tx_byte(byte_offset+5), get_tx_byte(byte_offset+4),
+                             get_tx_byte(byte_offset+3), get_tx_byte(byte_offset+2),
+                             get_tx_byte(byte_offset+1), get_tx_byte(byte_offset),
+                             payload_beat, rx_marker, rx_pkt_idx, rx_beat_idx);
+                end
+
+                if (rx_marker !== 32'hA5A5A5A5 && local_errors < 4) begin
+                    $display("[%0t] ERROR: Payload beat %0d bad marker: got %08h (full=%016h)",
+                             $time, beat_idx, rx_marker, payload_beat);
+                    local_errors = local_errors + 1;
+                end
+
+                if (rx_pkt_idx !== rx_seq[15:0] && local_errors < 4) begin
+                    $display("[%0t] ERROR: Payload beat %0d pkt_idx mismatch: expected %04h, got %04h",
+                             $time, beat_idx, rx_seq[15:0], rx_pkt_idx);
+                    local_errors = local_errors + 1;
+                end
+
+                if (rx_beat_idx !== beat_idx[15:0] && local_errors < 4) begin
+                    $display("[%0t] ERROR: Payload beat %0d beat_idx mismatch: expected %04h, got %04h",
+                             $time, beat_idx, beat_idx[15:0], rx_beat_idx);
+                    local_errors = local_errors + 1;
+                end
+            end
+
+            if (local_errors > 0) begin
+                $display("[%0t] ERROR: Payload integrity check: %0d errors out of %0d beats",
+                         $time, local_errors, num_beats);
+                error_count = error_count + 1;
+            end else
+                $display("[%0t] PASS: Payload integrity correct (%0d beats, pkt_idx=%04h)",
+                         $time, num_beats, rx_seq[15:0]);
+        end
     end
 endtask
 

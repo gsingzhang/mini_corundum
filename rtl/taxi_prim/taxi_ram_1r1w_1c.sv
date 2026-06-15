@@ -47,6 +47,7 @@ reg [DATA_W-1:0] rd_data_reg = '0;
 assign rd_data = rd_data_reg;
 
 // (* RAM_STYLE="BLOCK" *)
+(* public *)
 logic [DATA_W-1:0] mem[2**ADDR_W] = '{default: '0};
 
 always_ff @(posedge clk) begin
