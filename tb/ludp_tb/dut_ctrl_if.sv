@@ -8,6 +8,10 @@ interface dut_ctrl_if(input bit clk);
     bit [31:0] tx_seq_num;
     bit        tx_enabled;
     bit        dma_wr_enable;
+    bit        retx_found;
+    bit        block_recycle;
+    bit        resp_ongoing;
+    bit        status_valid;
 
     bit [15:0] force_status_opcode;
     bit [31:0] force_status_data;
@@ -26,7 +30,7 @@ interface dut_ctrl_if(input bit clk);
         output force_status_opcode, force_status_data, force_status_valid;
         output force_status_en, force_status_release;
         output rst, sfp0_tx_rst, sfp0_rx_rst, sfp1_tx_rst, sfp1_rx_rst;
-        input tx_seq_num, tx_enabled, dma_wr_enable;
+        input tx_seq_num, tx_enabled, dma_wr_enable, retx_found, block_recycle, resp_ongoing, status_valid;
     endclocking
 
     modport ctrl(clocking cb);

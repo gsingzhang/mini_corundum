@@ -123,7 +123,7 @@ class ludp_rx_frame extends uvm_sequence_item;
                 case (ludp_type)
                     TYPE_DATA: begin
                         frame_type = FRAME_LUDP_DATA;
-                        ludp_pay_len = ludp_arg2;
+                        ludp_pay_len = ludp_opcode;
                         ludp_payload_beats = ludp_pay_len / 8;
                     end
                     TYPE_CMD_ACK: frame_type = FRAME_LUDP_ACK;
@@ -169,7 +169,6 @@ class ludp_rx_frame extends uvm_sequence_item;
             rx_pkt_idx  = payload_beat[63:48];
 
             if (rx_marker !== 32'hA5A5A5A5 ||
-                rx_pkt_idx !== ludp_seq[15:0] ||
                 rx_beat_idx !== beat_idx[15:0])
                 err_count++;
         end

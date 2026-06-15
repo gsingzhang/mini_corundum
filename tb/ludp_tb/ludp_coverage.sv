@@ -99,6 +99,8 @@ class ludp_coverage extends uvm_component;
     bit session_active;
     int prev_cmd_start_count;
     int credit_count;
+    bit prev_retx_found;
+    bit prev_block_recycle;
 
     `uvm_component_utils(ludp_coverage)
 
@@ -137,10 +139,23 @@ class ludp_coverage extends uvm_component;
             @(posedge ctrl_vif.clk);
             if (ctrl_vif.rst) begin
                 prev_dma_wr_enable = 0;
+                prev_retx_found = 0;
+                prev_block_recycle = 0;
             end else begin
                 if (ctrl_vif.get_dma_wr_enable() && !prev_dma_wr_enable)
                     cov_wr_backpressure = cov_wr_backpressure + 1;
                 prev_dma_wr_enable = ctrl_vif.get_dma_wr_enable();
+
+                if (ctrl_vif.retx_found && !prev_retx_found && ctrl_vif.tx_enabled)
+                    cov_retx_priority = cov_retx_priority + 1;
+                prev_retx_found = ctrl_vif.retx_found;
+
+                if (ctrl_vif.block_recycle && !prev_block_recycle)
+                    cov_block_recycle = cov_block_recycle + 1;
+                prev_block_recycle = ctrl_vif.block_recycle;
+
+                if (ctrl_vif.status_valid && ctrl_vif.resp_ongoing)
+                    cov_status_suppress = cov_status_suppress + 1;
             end
         end
     endtask
@@ -169,11 +184,11 @@ class ludp_coverage extends uvm_component;
             cov_arp_reply = cov_arp_reply + 1;
         if (t.frame_type == FRAME_LUDP_ACK)
             cov_cmd_ack = cov_cmd_ack + 1;
-        if (t.frame_type == FRAME_LUDP_CPL)
+        if (t.frame_type == FRAME_LUDP_CPL) begin
             cov_cmd_cpl = cov_cmd_cpl + 1;
-
-        if (t.frame_type == FRAME_LUDP_CMD)
-            cov_status_resp = cov_status_resp + 1;
+            if (t.ludp_opcode != CMD_START && t.ludp_opcode != CMD_STOP)
+                cov_status_resp = cov_status_resp + 1;
+        end
 
         if (t.frame_type == FRAME_UNKNOWN)
             cov_unknown_type = cov_unknown_type + 1;

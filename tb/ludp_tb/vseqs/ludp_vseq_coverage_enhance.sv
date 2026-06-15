@@ -99,11 +99,36 @@ class coverage_enhance_vseq extends ludp_virtual_sequence_base;
         send_stop();
         wait_clocks(500);
 
+        reset_dut();
+        send_start(16'd4096);
+        send_credit(32'h1);
+        wait_clocks(30000);
+        send_stop();
+        wait_clocks(500);
+
+        reset_dut();
+        send_start(16'd8960);
+        send_credit(32'h1);
+        wait_clocks(50000);
+        send_stop();
+        wait_clocks(500);
+
         `uvm_info("VSEQ", "COV: Status inject", UVM_NONE)
         reset_dut();
         send_start(16'd64);
         wait_clocks(1000);
         inject_status(16'h0020, 32'hDEADBEEF);
+        wait_clocks(5000);
+        send_stop();
+        wait_clocks(500);
+
+        `uvm_info("VSEQ", "COV: Status suppress (inject during resp_ongoing)", UVM_NONE)
+        reset_dut();
+        send_start(16'd64);
+        send_credit(32'h1);
+        wait_clocks(500);
+        inject_status(16'h0030, 32'hCAFEBABE);
+        inject_status(16'h0040, 32'hFEEDFACE);
         wait_clocks(5000);
         send_stop();
         wait_clocks(500);
