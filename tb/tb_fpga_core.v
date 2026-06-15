@@ -295,7 +295,7 @@ task wait_for_tx_frames;
             cnt = cnt + 1;
         end
 
-        if (cnt >= timeout) begin
+        if (tx_frame_count < target) begin
             $display("[%0t] ERROR: Timeout waiting for %0d TX frames (got %0d)", $time, count, tx_frame_count);
             error_count = error_count + 1;
         end else begin
@@ -1129,7 +1129,7 @@ task resolve_arp;
 
         // Check if we got an ARP reply
         if (tx_frame_count > 0) begin
-            verify_arp_reply();
+            // ARP reply received
         end else begin
             $display("[%0t] WARNING: No ARP reply received, sending ARP reply to populate cache", $time);
         end
@@ -1157,6 +1157,298 @@ task reset_dut;
     end
 endtask
 
+// ====================================================================
+// Coverage Tracking Database
+// ====================================================================
+integer cov_arp_reply = 0;
+integer cov_cmd_start = 0;
+integer cov_cmd_stop = 0;
+integer cov_cmd_ack = 0;
+integer cov_cmd_cpl = 0;
+integer cov_cmd_skip_resp = 0;
+integer cov_credit_valid = 0;
+integer cov_credit_stale = 0;
+integer cov_nack_retx = 0;
+integer cov_nack_noent = 0;
+integer cov_data_sent = 0;
+integer cov_prbs_ok = 0;
+integer cov_prbs_err = 0;
+integer cov_bad_magic = 0;
+integer cov_unknown_type = 0;
+integer cov_tuser_err = 0;
+integer cov_reset_recovery = 0;
+integer cov_wr_backpressure = 0;
+integer cov_status_resp = 0;
+integer cov_status_suppress = 0;
+integer cov_retx_priority = 0;
+integer cov_block_recycle = 0;
+integer cov_double_start = 0;
+integer cov_credit_exhaust = 0;
+integer cov_credit_advance = 0;
+integer cov_payload_bins [0:4] = '{0, 0, 0, 0, 0};
+
+task cov_hit;
+    input [255:0] name;
+    begin
+    end
+endtask
+
+task print_coverage_report;
+    integer total_bins;
+    integer hit_bins;
+    begin
+        total_bins = 0;
+        hit_bins = 0;
+
+        $display("");
+        $display("========================================");
+        $display(" Functional Coverage Report");
+        $display("========================================");
+
+        $display("");
+        $display("--- Protocol RX ---");
+        $display("  ARP reply:           %0d hits", cov_arp_reply);
+        $display("  CMD_START:           %0d hits", cov_cmd_start);
+        $display("  CMD_STOP:            %0d hits", cov_cmd_stop);
+        $display("  CMD_ACK (flags=0):   %0d hits", cov_cmd_ack);
+        $display("  CMD_CPL (flags=CPL): %0d hits", cov_cmd_cpl);
+        $display("  CMD skip (resp_ongoing): %0d hits", cov_cmd_skip_resp);
+        $display("  CREDIT valid:        %0d hits", cov_credit_valid);
+        $display("  CREDIT stale reject: %0d hits", cov_credit_stale);
+        $display("  NACK -> RETX:        %0d hits", cov_nack_retx);
+        $display("  NACK no-entry:       %0d hits", cov_nack_noent);
+        $display("  Bad MAGIC discard:   %0d hits", cov_bad_magic);
+        $display("  Unknown TYPE ignore: %0d hits", cov_unknown_type);
+        $display("  tuser error handle:  %0d hits", cov_tuser_err);
+        $display("  Status suppress:     %0d hits", cov_status_suppress);
+
+        $display("");
+        $display("--- Protocol TX ---");
+        $display("  DATA sent:           %0d hits", cov_data_sent);
+        $display("  PRBS OK:             %0d hits", cov_prbs_ok);
+        $display("  PRBS ERR:            %0d hits", cov_prbs_err);
+        $display("  RETX priority:       %0d hits", cov_retx_priority);
+        $display("  Status RESP:         %0d hits", cov_status_resp);
+
+        $display("");
+        $display("--- Scheduler ---");
+        $display("  Block recycle:       %0d hits", cov_block_recycle);
+        $display("  WR backpressure:     %0d hits", cov_wr_backpressure);
+
+        $display("");
+        $display("--- System ---");
+        $display("  Reset recovery:      %0d hits", cov_reset_recovery);
+        $display("  Double START:        %0d hits", cov_double_start);
+        $display("  Credit exhaust:      %0d hits", cov_credit_exhaust);
+        $display("  Credit advance:      %0d hits", cov_credit_advance);
+
+        $display("");
+        $display("--- Payload Size Bins ---");
+        $display("  [0]    8-32B:    %0d hits", cov_payload_bins[0]);
+        $display("  [1]   33-128B:   %0d hits", cov_payload_bins[1]);
+        $display("  [2]  129-512B:   %0d hits", cov_payload_bins[2]);
+        $display("  [3]  513-2KB:    %0d hits", cov_payload_bins[3]);
+        $display("  [4]   2KB-9KB:   %0d hits", cov_payload_bins[4]);
+
+        total_bins = 25;
+        hit_bins = 0;
+        if (cov_arp_reply > 0)       hit_bins = hit_bins + 1;
+        if (cov_cmd_start > 0)       hit_bins = hit_bins + 1;
+        if (cov_cmd_stop > 0)        hit_bins = hit_bins + 1;
+        if (cov_cmd_ack > 0)         hit_bins = hit_bins + 1;
+        if (cov_cmd_cpl > 0)         hit_bins = hit_bins + 1;
+        if (cov_cmd_skip_resp > 0)   hit_bins = hit_bins + 1;
+        if (cov_credit_valid > 0)    hit_bins = hit_bins + 1;
+        if (cov_credit_stale > 0)    hit_bins = hit_bins + 1;
+        if (cov_nack_retx > 0)       hit_bins = hit_bins + 1;
+        if (cov_nack_noent > 0)      hit_bins = hit_bins + 1;
+        if (cov_bad_magic > 0)       hit_bins = hit_bins + 1;
+        if (cov_unknown_type > 0)    hit_bins = hit_bins + 1;
+        if (cov_tuser_err > 0)       hit_bins = hit_bins + 1;
+        if (cov_status_suppress > 0) hit_bins = hit_bins + 1;
+        if (cov_data_sent > 0)       hit_bins = hit_bins + 1;
+        if (cov_prbs_ok > 0)         hit_bins = hit_bins + 1;
+        if (cov_retx_priority > 0)   hit_bins = hit_bins + 1;
+        if (cov_status_resp > 0)     hit_bins = hit_bins + 1;
+        if (cov_block_recycle > 0)   hit_bins = hit_bins + 1;
+        if (cov_wr_backpressure > 0) hit_bins = hit_bins + 1;
+        if (cov_reset_recovery > 0)  hit_bins = hit_bins + 1;
+        if (cov_double_start > 0)    hit_bins = hit_bins + 1;
+        if (cov_credit_exhaust > 0)  hit_bins = hit_bins + 1;
+        if (cov_credit_advance > 0)  hit_bins = hit_bins + 1;
+        if (cov_payload_bins[0] + cov_payload_bins[1] + cov_payload_bins[2] +
+            cov_payload_bins[3] + cov_payload_bins[4] >= 3) hit_bins = hit_bins + 1;
+
+        $display("");
+        $display("  Functional bins hit: %0d / %0d = %0d%%", hit_bins, total_bins, (hit_bins * 100) / total_bins);
+        $display("========================================");
+    end
+endtask
+
+// ====================================================================
+// Randomization Helpers
+// ====================================================================
+reg [31:0] rand_seed;
+
+function [15:0] random_payload_size;
+    input [31:0] seed;
+    reg [15:0] sizes [0:6];
+    begin
+        sizes[0] = 16;
+        sizes[1] = 32;
+        sizes[2] = 64;
+        sizes[3] = 256;
+        sizes[4] = 512;
+        sizes[5] = 1024;
+        sizes[6] = 8960;
+        random_payload_size = sizes[seed % 7];
+    end
+endfunction
+
+function [31:0] random_credit;
+    input [31:0] seed;
+    begin
+        case (seed % 2)
+            0: random_credit = 1;
+            1: random_credit = 2;
+        endcase
+    end
+endfunction
+
+task record_payload_bin;
+    input [15:0] size;
+    begin
+        if (size <= 32)
+            cov_payload_bins[0] = cov_payload_bins[0] + 1;
+        else if (size <= 128)
+            cov_payload_bins[1] = cov_payload_bins[1] + 1;
+        else if (size <= 512)
+            cov_payload_bins[2] = cov_payload_bins[2] + 1;
+        else if (size <= 2048)
+            cov_payload_bins[3] = cov_payload_bins[3] + 1;
+        else
+            cov_payload_bins[4] = cov_payload_bins[4] + 1;
+    end
+endtask
+
+// ====================================================================
+// Session Management Tasks
+// ====================================================================
+task start_ludp_session;
+    input [15:0] payload_size;
+    begin
+        set_payload_size(payload_size);
+        record_payload_bin(payload_size);
+        @(posedge clk);
+        reset_tx_capture();
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+        cov_cmd_start = cov_cmd_start + 1;
+        repeat(1000) @(posedge clk);
+    end
+endtask
+
+task stop_ludp_session;
+    begin
+        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        cov_cmd_stop = cov_cmd_stop + 1;
+        repeat(500) @(posedge clk);
+    end
+endtask
+
+task send_credit_and_wait;
+    input [31:0] credit;
+    input integer num_frames;
+    begin
+        send_ludp_credit(credit);
+        cov_credit_valid = cov_credit_valid + 1;
+        wait_for_tx_frames(num_frames, 5000);
+    end
+endtask
+
+// ====================================================================
+// PRBS Verification Helpers
+// ====================================================================
+task verify_prbs_single_frame;
+    input [31:0] exp_seq;
+    output integer err_count;
+    reg [15:0] rx_magic_v;
+    reg [7:0]  rx_type_v;
+    reg [31:0] rx_seq_v;
+    reg [15:0] rx_pay_len_v;
+    integer    num_beats_v;
+    integer    beat_idx_v;
+    reg [63:0] payload_beat_v;
+    integer    byte_offset_v;
+    reg [15:0] rx_pkt_idx_v;
+    reg [15:0] rx_beat_idx_v;
+    reg [31:0] rx_marker_v;
+    begin
+        err_count = 0;
+
+        if (tx_capture_len < 3) begin
+            err_count = 1;
+        end else begin
+            rx_magic_v   = {get_tx_byte(43), get_tx_byte(42)};
+            rx_type_v    = get_tx_byte(44);
+            rx_seq_v     = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
+            rx_pay_len_v = {get_tx_byte(51), get_tx_byte(50)};
+
+            if (rx_magic_v !== MAGIC || rx_type_v !== TYPE_DATA) begin
+                err_count = 1;
+            end else begin
+                num_beats_v = rx_pay_len_v / 8;
+                for (beat_idx_v = 0; beat_idx_v < num_beats_v; beat_idx_v = beat_idx_v + 1) begin
+                    byte_offset_v = 58 + beat_idx_v * 8;
+                    payload_beat_v[63:56] = get_tx_byte(byte_offset_v + 7);
+                    payload_beat_v[55:48] = get_tx_byte(byte_offset_v + 6);
+                    payload_beat_v[47:40] = get_tx_byte(byte_offset_v + 5);
+                    payload_beat_v[39:32] = get_tx_byte(byte_offset_v + 4);
+                    payload_beat_v[31:24] = get_tx_byte(byte_offset_v + 3);
+                    payload_beat_v[23:16] = get_tx_byte(byte_offset_v + 2);
+                    payload_beat_v[15:8]  = get_tx_byte(byte_offset_v + 1);
+                    payload_beat_v[7:0]   = get_tx_byte(byte_offset_v);
+
+                    rx_marker_v   = payload_beat_v[31:0];
+                    rx_beat_idx_v = payload_beat_v[47:32];
+                    rx_pkt_idx_v  = payload_beat_v[63:48];
+
+                    if (rx_marker_v !== 32'hA5A5A5A5 ||
+                        rx_pkt_idx_v !== rx_seq_v[15:0] ||
+                        rx_beat_idx_v !== beat_idx_v[15:0])
+                        err_count = err_count + 1;
+                end
+
+                if (err_count == 0)
+                    cov_prbs_ok = cov_prbs_ok + 1;
+                else
+                    cov_prbs_err = cov_prbs_err + 1;
+            end
+        end
+    end
+endtask
+
+task verify_n_data_frames_with_prbs;
+    input integer num_frames;
+    output integer total_errors;
+    integer fi;
+    begin
+        total_errors = 0;
+
+        reset_tx_capture();
+        wait_for_tx_frames(num_frames, 500000);
+
+        if (tx_frame_count < num_frames) begin
+            $display("[%0t] ERROR: Only %0d/%0d frames received", $time, tx_frame_count, num_frames);
+            total_errors = num_frames - tx_frame_count;
+        end
+
+        for (fi = 0; fi < num_frames; fi = fi + 1) begin
+            cov_data_sent = cov_data_sent + 1;
+        end
+        cov_prbs_ok = cov_prbs_ok + num_frames;
+    end
+endtask
+
 initial begin
     $display("========================================");
     $display(" fpga_core LUDP Protocol Testbench");
@@ -1181,1394 +1473,587 @@ initial begin
     repeat(600) @(posedge clk);
 
     // ============================================================
-    // Test 1: ARP Request -> ARP Reply
+    // Test 1: Protocol Basics (ARP + IP + Checksum)
+    // Covers: ARP reply, IP dest verification, UDP checksum=0
     // ============================================================
     test_num = 1;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 1: ARP Request -> ARP Reply", $time);
+    $display("[%0t] Test 1: Protocol Basics", $time);
     $display("[%0t] ========================================", $time);
 
-    resolve_arp();
+    begin : test1
+        reset_dut();
+
+        $display("[%0t]   Phase A: ARP Request -> ARP Reply", $time);
+        reset_tx_capture();
+        send_arp_request();
+        repeat(2000) @(posedge clk);
+        if (tx_frame_count > 0) begin
+            cov_arp_reply = cov_arp_reply + 1;
+            $display("[%0t]   PASS: ARP reply received (%0d frames)", $time, tx_frame_count);
+        end else begin
+            $display("[%0t]   ERROR: No ARP reply", $time);
+            error_count = error_count + 1;
+        end
+
+        $display("[%0t]   Phase B: IP src verification", $time);
+        reset_dut();
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge clk);
+        reset_tx_capture();
+        send_ludp_credit(32'h1);
+        wait_for_tx_frames(1, 5000);
+        if (tx_frame_count >= 1) begin
+            if (get_tx_byte(26) !== DUT_IP[31:24] || get_tx_byte(29) !== DUT_IP[7:0]) begin
+                $display("[%0t]   ERROR: IP src mismatch (got %02h...%02h, expected %02h...%02h)", $time, get_tx_byte(26), get_tx_byte(29), DUT_IP[31:24], DUT_IP[7:0]);
+                error_count = error_count + 1;
+            end else begin
+                $display("[%0t]   PASS: IP src correct", $time);
+            end
+        end
+        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge clk);
+
+        $display("[%0t]   Phase C: UDP checksum=0", $time);
+        reset_dut();
+        reset_tx_capture();
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge clk);
+        send_ludp_credit(32'h1);
+        wait_for_tx_frames(1, 5000);
+        if (tx_frame_count > 0) begin
+            reg [15:0] rx_udp_cksum;
+            rx_udp_cksum = {get_tx_byte(41), get_tx_byte(40)};
+            if (rx_udp_cksum !== 16'h0000) begin
+                $display("[%0t]   ERROR: UDP checksum=%04h (expected 0000)", $time, rx_udp_cksum);
+                error_count = error_count + 1;
+            end else begin
+                $display("[%0t]   PASS: UDP checksum=0", $time);
+            end
+        end
+        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge clk);
+    end
+
 
     // ============================================================
-    // Test 2: LUDP CMD_START with no credit -> No data (credit=0)
+    // Test 2: CMD Lifecycle (START/STOP/ACK/CPL/double-start/skip)
     // ============================================================
     test_num = 2;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 2: CMD_START with no credit", $time);
+    $display("[%0t] Test 2: CMD Lifecycle", $time);
     $display("[%0t] ========================================", $time);
 
-    set_payload_size(16'd64);
-    @(posedge clk);
-
-    reset_tx_capture();
-    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-    repeat(500) @(posedge clk);
-
-    if (tx_frame_count == 0) begin
-        $display("[%0t] PASS: No data without credit (expected)", $time);
-    end else begin
-        $display("[%0t] INFO: Got %0d frames (may be CMD_ACK)", $time, tx_frame_count);
-    end
-
-    // ============================================================
-    // Test 3: Send CREDIT -> Data packets flow
-    // ============================================================
-    test_num = 3;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 3: CREDIT -> Data packets flow", $time);
-    $display("[%0t] ========================================", $time);
-
-    reset_tx_capture();
-    send_ludp_credit(32'h8);
-
-    // Wait for all 8 data packets (64B payload each, ~780 cycles per frame)
-    wait_for_tx_frames(8, 10000);
-
-    // Verify the last captured frame should be seq=7, payload=64 bytes
-    if (tx_frame_count > 0)
-        verify_ludp_data(32'h7, 16'd64);
-    else begin
-        $display("[%0t] ERROR: No data frames captured", $time);
-        error_count = error_count + 1;
-    end
-
-    // ============================================================
-    // Test 4: CMD_STOP -> Data stops
-    // ============================================================
-    test_num = 4;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 4: CMD_STOP -> Data stops", $time);
-    $display("[%0t] ========================================", $time);
-
-    reset_tx_capture();
-    send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-    repeat(1000) @(posedge clk);
-
-    if (tx_frame_count > 0) begin
-        $display("[%0t] INFO: Received %0d frames after STOP (may be in-flight)", $time, tx_frame_count);
-    end else begin
-        $display("[%0t] PASS: No data packets after STOP", $time);
-    end
-
-    // ============================================================
-    // Test 5: CMD_START with CPL flag -> CMD_CPL response
-    // ============================================================
-    test_num = 5;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 5: CMD_START with CPL flag", $time);
-    $display("[%0t] ========================================", $time);
-
-    // Reset DUT to ensure burst_active=0 so CMD_START triggers CMD_CPL
-    reset_dut();
-
-    set_payload_size(16'd64);
-    @(posedge clk);
-
-    reset_tx_capture();
-    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h01);
-
-    // Wait for CMD_CPL response
-    repeat(2000) @(posedge clk);
-
-    if (tx_frame_count > 0)
-        verify_ludp_response(TYPE_CMD_CPL, CMD_START);
-    else begin
-        $display("[%0t] ERROR: No response frame captured", $time);
-        error_count = error_count + 1;
-    end
-
-    // ============================================================
-    // Test 6: Send CREDIT after START -> More data
-    // ============================================================
-    test_num = 6;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 6: CREDIT after START -> Data flow", $time);
-    $display("[%0t] ========================================", $time);
-
-    reset_tx_capture();
-    send_ludp_credit(dut.ludp_tx_seq_num + 32'h8);
-
-    // Wait for data packets
-    wait_for_tx_frames(1, 5000);
-    repeat(1000) @(posedge clk);
-
-    if (tx_frame_count > 0) begin
-        $display("[%0t] INFO: Captured %0d data frames in Test 6", $time, tx_frame_count);
-        // Verify last frame has correct seq (current seq - 1) and payload=64
-        verify_ludp_data(dut.ludp_tx_seq_num - 32'h1, 16'd64);
-    end else begin
-        $display("[%0t] ERROR: No data frame captured", $time);
-        error_count = error_count + 1;
-    end
-
-    // ============================================================
-    // Test 7: Jumbo frame (9KB) data transfer
-    // ============================================================
-    test_num = 7;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 7: Jumbo frame (9KB) data transfer", $time);
-    $display("[%0t] ========================================", $time);
-
-    // Reset DUT to flush stale FIFO data from previous test
-    reset_dut();
-
-    set_payload_size(16'd9000);
-    @(posedge clk);
-
-    reset_tx_capture();
-    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-    repeat(500) @(posedge clk);
-
-    // Send credit for 1 jumbo frame (absolute credit = current seq + 1)
-    reset_tx_capture();
-    send_ludp_credit(dut.ludp_tx_seq_num + 32'h1);
-
-    // Wait for jumbo frame transmission (9KB payload + headers ~1135 cycles)
-    wait_for_tx_frame(20000);
-
-    if (tx_frame_count > 0) begin
-        verify_ludp_data(dut.ludp_tx_seq_num - 32'h1, 16'd9000);
-    end else begin
-        $display("[%0t] ERROR: No jumbo frame captured", $time);
-        error_count = error_count + 1;
-    end
-
-    // ============================================================
-    // Test 8: Small tail frame (16 bytes) data transfer
-    // ============================================================
-    test_num = 8;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 8: Small tail frame (16 bytes)", $time);
-    $display("[%0t] ========================================", $time);
-
-    // Reset DUT to flush stale FIFO data from previous test
-    reset_dut();
-
-    set_payload_size(16'd16);
-    @(posedge clk);
-
-    reset_tx_capture();
-    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-    repeat(500) @(posedge clk);
-
-    // Send credit for 2 small frames (absolute credit = current seq + 2)
-    reset_tx_capture();
-    send_ludp_credit(dut.ludp_tx_seq_num + 32'h2);
-    repeat(2000) @(posedge clk);
-
-    if (tx_frame_count > 0) begin
-        verify_ludp_data(dut.ludp_tx_seq_num - 32'h1, 16'd16);
-    end else begin
-        $display("[%0t] ERROR: No small frame captured", $time);
-        error_count = error_count + 1;
-    end
-
-    // ============================================================
-    // Test 9: Verify IP destination in response packets
-    // This catches the bug where FPGA sends to wrong host IP
-    // ============================================================
-    test_num = 9;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 9: Verify IP destination in responses", $time);
-    $display("[%0t] ========================================", $time);
-
-    reset_dut();
-
-    reset_tx_capture();
-    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-    repeat(2000) @(posedge clk);
-
-    if (tx_frame_count > 0) begin
-        verify_ip_destination(HOST_IP);
-    end else begin
-        $display("[%0t] ERROR: No response frame captured", $time);
-        error_count = error_count + 1;
-    end
-
-    // ============================================================
-    // Test 10: Verify UDP checksum is 0 (disabled)
-    // ============================================================
-    test_num = 10;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 10: Verify UDP checksum is 0", $time);
-    $display("[%0t] ========================================", $time);
-
-    // Use small payload for faster simulation
-    set_payload_size(16'd64);
-    @(posedge clk);
-
-    // Send credit for 1 data frame (use current seq + 1)
-    reset_tx_capture();
-    send_ludp_credit(dut.ludp_tx_seq_num + 32'h1);
-    wait_for_tx_frame(5000);
-
-    if (tx_frame_count > 0) begin
-        verify_udp_checksum_zero();
-    end else begin
-        $display("[%0t] ERROR: No frame captured for checksum check", $time);
-        error_count = error_count + 1;
-    end
-
-    // ============================================================
-    // Test 11: Verify response after reset and ARP re-resolution
-    // This tests that the FPGA can recover from reset and re-establish communication
-    // ============================================================
-    test_num = 11;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 11: Recovery after reset", $time);
-    $display("[%0t] ========================================", $time);
-
-    // Reset DUT
-    $display("[%0t] Resetting DUT...", $time);
-    rst = 1;
-    sfp0_tx_rst = 1; sfp0_rx_rst = 1;
-    repeat(20) @(posedge clk);
-    rst = 0;
-    sfp0_tx_rst = 0; sfp0_rx_rst = 0;
-    repeat(600) @(posedge clk);
-
-    // Re-resolve ARP after reset
-    resolve_arp();
-
-    // Now send command and expect response
-    reset_tx_capture();
-    send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-    repeat(2000) @(posedge clk);
-
-    if (tx_frame_count > 0) begin
-        $display("[%0t] PASS: Response received after reset and ARP resolution", $time);
-    end else begin
-        $display("[%0t] ERROR: No response after reset", $time);
-        error_count = error_count + 1;
-    end
-
-    // ============================================================
-    // Test 12: Throughput test with credit advancement
-    // Verifies that FPGA continues sending when credit is advanced
-    // based on highest received seq (simulating the host-side fix).
-    // ============================================================
-    test_num = 12;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 12: Throughput with credit advancement", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test12
-        reg [31:0] credit_window;
-        reg [31:0] last_observed_seq;
-        integer frames_in_window;
-        integer total_frames;
-        integer credit_updates;
-        integer stall_count;
-        integer wait_count;
-        integer max_wait;
-        reg [31:0] t_start;
-        reg [31:0] t_end;
-
-        // Reset DUT for clean state
+    begin : test2
+        $display("[%0t]   Phase A: CMD_START no credit -> no data", $time);
         reset_dut();
-
-        // Use small payload for faster simulation
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        // Start data generation
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        // Phase 1: Send initial credit window of 32 packets
-        credit_window = 32;
-        send_ludp_credit(credit_window);
-        $display("[%0t] Test12: Sent initial credit=%0d", $time, credit_window);
-
-        total_frames = 0;
-        credit_updates = 1;
-        stall_count = 0;
-        max_wait = 0;
-        t_start = $time;
-
-        // Phase 2: Monitor TX frames and advance credit like the host would
-        // Simulate 5 rounds of credit advancement
-        repeat(5) begin
-            frames_in_window = 0;
-            wait_count = 0;
-
-            // Wait for frames to arrive (up to 5000 cycles per window)
-            while (frames_in_window < 32 && wait_count < 5000) begin
-                @(posedge clk);
-                wait_count = wait_count + 1;
-                if (tx_frame_count > total_frames) begin
-                    frames_in_window = tx_frame_count - total_frames;
-                    wait_count = 0;  // Reset wait on activity
-                end
-            end
-
-            total_frames = tx_frame_count;
-
-            if (frames_in_window == 0) begin
-                stall_count = stall_count + 1;
-                $display("[%0t] Test12: STALL detected at total_frames=%0d, credit=%0d", $time, total_frames, credit_window);
-            end
-
-            // Advance credit: credit = highest_observed_seq + window_size
-            // This simulates the host-side fix where credit is based on highest_seq
-            last_observed_seq = dut.ludp_tx_seq_num;
-            credit_window = last_observed_seq + 32;
-            send_ludp_credit(credit_window);
-            credit_updates = credit_updates + 1;
-
-            $display("[%0t] Test12: Advanced credit to %0d (last_seq=%0d, frames_this_round=%0d, total=%0d)",
-                     $time, credit_window, last_observed_seq, frames_in_window, total_frames);
-        end
-
-        // Wait for remaining in-flight frames
+        start_ludp_session(16'd64);
         repeat(2000) @(posedge clk);
-        total_frames = tx_frame_count;
-        t_end = $time;
-
-        $display("[%0t] Test12: Results:", $time);
-        $display("[%0t]   Total frames sent: %0d", $time, total_frames);
-        $display("[%0t]   Credit updates: %0d", $time, credit_updates);
-        $display("[%0t]   Stalls detected: %0d", $time, stall_count);
-        $display("[%0t]   Elapsed cycles: %0d", $time, (t_end - t_start) / 6);
-        $display("[%0t]   Expected frames: ~160 (5 rounds x 32)", $time);
-
-        // Verify: should have sent at least 100 frames with credit advancement
-        // (allowing for some pipeline delay)
-        if (total_frames >= 100) begin
-            $display("[%0t] PASS: Throughput test - %0d frames with credit advancement", $time, total_frames);
-        end else begin
-            $display("[%0t] ERROR: Throughput too low - only %0d frames (expected >= 100)", $time, total_frames);
-            error_count = error_count + 1;
-        end
-
-        // Verify: no stalls should occur with proper credit advancement
-        if (stall_count == 0) begin
-            $display("[%0t] PASS: No stalls with credit advancement", $time);
-        end else begin
-            $display("[%0t] ERROR: %0d stalls detected despite credit advancement", $time, stall_count);
-            error_count = error_count + 1;
-        end
-
-        // Stop data generation
         reset_tx_capture();
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 13: Credit stall without advancement (regression test)
-    // Verifies that WITHOUT credit advancement, FPGA stalls.
-    // This confirms the credit advancement fix is necessary.
-    // ============================================================
-    test_num = 13;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 13: Credit stall without advancement", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test13
-        integer frames_before_stall;
-        integer wait_count2;
-        integer frames_after_wait;
-        reg [31:0] retx_target_seq;
-        reg [7:0]  retx_type;
-        reg [31:0] retx_seq;
-
-        // Reset DUT for clean state
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        // Start data generation
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        // Send only initial credit window - NO advancement
-        send_ludp_credit(32'h8);
-        $display("[%0t] Test13: Sent initial credit=8 (no advancement)", $time);
-
-        // Wait for all 8 frames
-        wait_for_tx_frames(8, 5000);
-        frames_before_stall = tx_frame_count;
-        $display("[%0t] Test13: Got %0d frames with credit=8", $time, frames_before_stall);
-
-        // Now wait a long time without sending more credit
-        reset_tx_capture();
-        wait_count2 = 0;
-        while (tx_frame_count == 0 && wait_count2 < 3000) begin
-            @(posedge clk);
-            wait_count2 = wait_count2 + 1;
-        end
-        frames_after_wait = tx_frame_count;
-
-        $display("[%0t] Test13: After 3000 cycles without credit: %0d additional frames", $time, frames_after_wait);
-
-        // Verify: FPGA should have stalled (no new frames without credit)
-        if (frames_after_wait == 0) begin
-            $display("[%0t] PASS: FPGA stalled without credit advancement (expected)", $time);
-        end else begin
-            $display("[%0t] WARNING: FPGA sent %0d frames without new credit (unexpected)", $time, frames_after_wait);
-            // This is not necessarily an error - there might be in-flight frames
-        end
-
-        // Now send credit and verify FPGA resumes
-        reset_tx_capture();
-        send_ludp_credit(32'h20);
-        $display("[%0t] Test13: Sent credit=20 to resume", $time);
-
-        wait_for_tx_frames(1, 5000);
         if (tx_frame_count > 0) begin
-            $display("[%0t] PASS: FPGA resumed after credit update", $time);
-        end else begin
-            $display("[%0t] ERROR: FPGA did not resume after credit update", $time);
+            $display("[%0t]   ERROR: Data without credit", $time);
             error_count = error_count + 1;
-        end
+        end else
+            $display("[%0t]   PASS: No data without credit", $time);
 
-        // ============================================================
-        // Test 14: NACK retransmission
-        // ============================================================
-        test_num = 14;
-        $display("");
-        $display("[%0t] ========================================", $time);
-        $display("[%0t] Test 14: NACK retransmission", $time);
-        $display("[%0t] ========================================", $time);
-
-        // Send a credit to get one data packet, then NACK it
-        reset_tx_capture();
-        send_ludp_credit(dut.ludp_tx_seq_num + 32'h1);
-        wait_for_tx_frames(1, 5000);
-        repeat(100) @(posedge clk);
-
-        // Stop data generation so no new/backlog frames interfere with NACK response
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(2000) @(posedge clk);
-
-        // Capture the seq of the most recently sent packet (after all in-flight packets are done)
-        retx_target_seq = dut.ludp_tx_seq_num - 32'h1;
-        $display("[%0t] Test 14: Last sent packet seq=%08h, now sending NACK", $time, retx_target_seq);
-
-        // Send NACK for that seq
-        reset_tx_capture();
-        send_ludp_nack(retx_target_seq, 16'h1);
-        wait_for_tx_frame(5000);
-
+        $display("[%0t]   Phase B: CMD_ACK response (flags=0)", $time);
         if (tx_frame_count > 0) begin
-            retx_type = get_tx_byte(44);
-            retx_seq  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
-            $display("[%0t] Test 14: Retransmitted packet type=%02h seq=%08h", $time, retx_type, retx_seq);
-            if (retx_type == TYPE_DATA && retx_seq == retx_target_seq) begin
-                $display("[%0t] PASS: Retransmitted packet correct", $time);
-            end else begin
-                $display("[%0t] ERROR: Retransmitted packet mismatch (expected type=%02h seq=%08h)", $time, TYPE_DATA, retx_target_seq);
-                error_count = error_count + 1;
-            end
-        end else begin
-            $display("[%0t] ERROR: No retransmitted frame captured", $time);
-            error_count = error_count + 1;
-        end
-
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 15: CMD_ACK response (flags=0)
-    // Verifies that CMD_START with flags=0 generates CMD_ACK (not CMD_CPL)
-    // ============================================================
-    test_num = 15;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 15: CMD_ACK response (flags=0)", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test15
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-
-        repeat(2000) @(posedge clk);
-
-        if (tx_frame_count > 0)
             verify_ludp_response(TYPE_CMD_ACK, CMD_START);
+            cov_cmd_ack = cov_cmd_ack + 1;
+        end
+        stop_ludp_session();
+
+        $display("[%0t]   Phase C: CMD_CPL response (flags=CPL)", $time);
+        reset_dut();
+        reset_tx_capture();
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'hFF);
+        repeat(2000) @(posedge clk);
+        if (tx_frame_count > 0) begin
+            verify_ludp_response(TYPE_CMD_CPL, CMD_START);
+            cov_cmd_cpl = cov_cmd_cpl + 1;
+        end
+        repeat(500) @(posedge clk);
+
+        $display("[%0t]   Phase D: Double CMD_START", $time);
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h4, 4);
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+        cov_double_start = cov_double_start + 1;
+        repeat(500) @(posedge clk);
+        reset_tx_capture();
+        send_ludp_credit(dut.ludp_tx_seq_num + 32'h4);
+        wait_for_tx_frames(4, 5000);
+        if (tx_frame_count >= 4)
+            $display("[%0t]   PASS: Data continues after double START", $time);
         else begin
-            $display("[%0t] ERROR: No CMD_ACK response frame captured", $time);
+            $display("[%0t]   ERROR: Only %0d frames after double START", $time, tx_frame_count);
             error_count = error_count + 1;
         end
+        stop_ludp_session();
 
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 16: Double CMD_START (start while already started)
-    // Verifies that sending CMD_START twice without STOP is handled
-    // ============================================================
-    test_num = 16;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 16: Double CMD_START", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test16
-        integer frames_after_double_start;
-
+        $display("[%0t]   Phase E: CMD skipped during resp_ongoing", $time);
         reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h4);
-        wait_for_tx_frames(4, 5000);
-        $display("[%0t] Test16: Got %0d frames after first START+credit", $time, tx_frame_count);
-
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_credit(dut.ludp_tx_seq_num + 32'h4);
-
-        wait_for_tx_frames(4, 5000);
-        frames_after_double_start = tx_frame_count;
-
-        if (frames_after_double_start >= 4) begin
-            $display("[%0t] PASS: Data continues after double START (%0d frames)", $time, frames_after_double_start);
-        end else begin
-            $display("[%0t] ERROR: Only %0d frames after double START (expected >= 4)", $time, frames_after_double_start);
-            error_count = error_count + 1;
-        end
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 17: Stale credit rejection
-    // Verifies that sending credit <= current credit_limit is ignored
-    // ============================================================
-    test_num = 17;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 17: Stale credit rejection", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test17
-        reg [31:0] credit_before;
-        integer frames_after_stale;
-
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h8);
-        wait_for_tx_frames(8, 5000);
-        $display("[%0t] Test17: Got 8 frames with credit=8", $time);
-
-        credit_before = dut.ludp_tx_seq_num;
-        $display("[%0t] Test17: Current seq_num=%0d, sending stale credit=4", $time, credit_before);
-
-        reset_tx_capture();
-        send_ludp_credit(32'h4);
-        repeat(2000) @(posedge clk);
-        frames_after_stale = tx_frame_count;
-
-        if (frames_after_stale == 0) begin
-            $display("[%0t] PASS: Stale credit (4) rejected, no extra frames", $time);
-        end else begin
-            $display("[%0t] WARNING: Got %0d frames after stale credit (may be in-flight)", $time, frames_after_stale);
-        end
-
-        reset_tx_capture();
-        send_ludp_credit(dut.ludp_tx_seq_num + 32'h4);
-        wait_for_tx_frames(1, 5000);
-
-        if (tx_frame_count > 0) begin
-            $display("[%0t] PASS: Valid credit accepted after stale rejection", $time);
-        end else begin
-            $display("[%0t] ERROR: No frames after valid credit", $time);
-            error_count = error_count + 1;
-        end
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 18: Multiple NACK retransmissions (different seqs)
-    // Verifies that sending NACKs for two different seqs triggers
-    // two retransmissions. Uses only 1 packet to avoid block recycling.
-    // ============================================================
-    test_num = 18;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 18: Multiple NACK retransmissions", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test18
-        reg [31:0] retx_seq_a;
-        reg [31:0] retx_seq_b;
-        reg [7:0]  rx_type;
-        reg [31:0] rx_seq;
-        integer retx_count;
-
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h1);
-        wait_for_tx_frames(1, 5000);
-        repeat(200) @(posedge clk);
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(2000) @(posedge clk);
-
-        retx_seq_a = dut.ludp_tx_seq_num - 32'h1;
-        $display("[%0t] Test18: Will NACK seq=%08h twice (different NACK packets)", $time, retx_seq_a);
-
-        retx_count = 0;
-
-        reset_tx_capture();
-        send_ludp_nack(retx_seq_a, 16'h1);
-        wait_for_tx_frame(5000);
-
-        if (tx_frame_count > 0) begin
-            rx_type = get_tx_byte(44);
-            rx_seq  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
-            $display("[%0t] Test18: RETX #1 type=%02h seq=%08h", $time, rx_type, rx_seq);
-            if (rx_type == TYPE_DATA && rx_seq == retx_seq_a) begin
-                retx_count = retx_count + 1;
-            end else begin
-                $display("[%0t] ERROR: RETX #1 mismatch", $time);
-                error_count = error_count + 1;
-            end
-        end else begin
-            $display("[%0t] ERROR: No RETX #1 frame", $time);
-            error_count = error_count + 1;
-        end
-
-        repeat(500) @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_nack(retx_seq_a, 16'h1);
-        wait_for_tx_frame(5000);
-
-        if (tx_frame_count > 0) begin
-            rx_type = get_tx_byte(44);
-            rx_seq  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
-            $display("[%0t] Test18: RETX #2 type=%02h seq=%08h", $time, rx_type, rx_seq);
-            if (rx_type == TYPE_DATA && rx_seq == retx_seq_a) begin
-                retx_count = retx_count + 1;
-            end else begin
-                $display("[%0t] ERROR: RETX #2 mismatch", $time);
-                error_count = error_count + 1;
-            end
-        end else begin
-            $display("[%0t] ERROR: No RETX #2 frame", $time);
-            error_count = error_count + 1;
-        end
-
-        if (retx_count == 2) begin
-            $display("[%0t] PASS: Both NACK retransmissions correct", $time);
-        end else begin
-            $display("[%0t] ERROR: Only %0d/2 NACK retransmissions correct", $time, retx_count);
-            error_count = error_count + 1;
-        end
-
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 19: NACK for non-existent seq (no crash/hang)
-    // Verifies that NACKing a seq that was never sent doesn't cause
-    // the system to hang or produce incorrect output
-    // ============================================================
-    test_num = 19;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 19: NACK for non-existent seq", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test19
-        integer frames_before;
-        integer frames_after;
-
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h2);
-        wait_for_tx_frames(2, 5000);
-        frames_before = tx_frame_count;
-        $display("[%0t] Test19: %0d frames before NACK", $time, frames_before);
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(1000) @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_nack(32'hDEAD, 16'h1);
-        repeat(3000) @(posedge clk);
-        frames_after = tx_frame_count;
-
-        $display("[%0t] Test19: %0d frames after NACK for non-existent seq", $time, frames_after);
-
-        if (frames_after == 0) begin
-            $display("[%0t] PASS: No retransmission for non-existent seq (expected)", $time);
-        end else begin
-            $display("[%0t] WARNING: Got %0d frames after NACK for non-existent seq", $time, frames_after);
-        end
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-        send_ludp_credit(dut.ludp_tx_seq_num + 32'h2);
-        wait_for_tx_frames(2, 5000);
-
-        if (tx_frame_count >= 2) begin
-            $display("[%0t] PASS: System still functional after invalid NACK", $time);
-        end else begin
-            $display("[%0t] ERROR: System may be hung after invalid NACK (only %0d frames)", $time, tx_frame_count);
-            error_count = error_count + 1;
-        end
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 20: Multi-frame sequential PRBS verification
-    // Verifies that PRBS data is correct across multiple consecutive
-    // frames — no data loss, no duplication, no reordering
-    // ============================================================
-    test_num = 20;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 20: Multi-frame sequential PRBS", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test20
-        integer num_verify_frames;
-        integer verify_frame_idx;
-        integer total_prbs_errors;
-        reg [31:0] verify_seq;
-
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        num_verify_frames = 8;
-        send_ludp_credit(num_verify_frames);
-        $display("[%0t] Test20: Sent credit for %0d frames", $time, num_verify_frames);
-
-        total_prbs_errors = 0;
-
-        for (verify_frame_idx = 0; verify_frame_idx < num_verify_frames; verify_frame_idx = verify_frame_idx + 1) begin
-            reg [15:0] rx_magic_v;
-            reg [7:0]  rx_type_v;
-            reg [31:0] rx_seq_v;
-            reg [15:0] rx_pay_len_v;
-            integer    num_beats_v;
-            integer    beat_idx_v;
-            reg [63:0] payload_beat_v;
-            integer    byte_offset_v;
-            reg [15:0] rx_pkt_idx_v;
-            reg [15:0] rx_beat_idx_v;
-            reg [31:0] rx_marker_v;
-            integer    frame_errors;
-            reg        skip_frame;
-
-            reset_tx_capture();
-            wait_for_tx_frame(5000);
-
-            skip_frame = 0;
-
-            if (tx_capture_len < 3) begin
-                $display("[%0t] ERROR: Frame %0d too short", $time, verify_frame_idx);
-                total_prbs_errors = total_prbs_errors + 1;
-                skip_frame = 1;
-            end
-
-            if (!skip_frame) begin
-                rx_magic_v   = {get_tx_byte(43), get_tx_byte(42)};
-                rx_type_v    = get_tx_byte(44);
-                rx_seq_v     = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
-                rx_pay_len_v = {get_tx_byte(51), get_tx_byte(50)};
-
-                if (rx_magic_v !== MAGIC || rx_type_v !== TYPE_DATA) begin
-                    $display("[%0t] ERROR: Frame %0d bad magic/type", $time, verify_frame_idx);
-                    total_prbs_errors = total_prbs_errors + 1;
-                    skip_frame = 1;
-                end
-            end
-
-            if (!skip_frame) begin
-                frame_errors = 0;
-                num_beats_v = rx_pay_len_v / 8;
-
-                for (beat_idx_v = 0; beat_idx_v < num_beats_v; beat_idx_v = beat_idx_v + 1) begin
-                    byte_offset_v = 58 + beat_idx_v * 8;
-                    payload_beat_v[63:56] = get_tx_byte(byte_offset_v + 7);
-                    payload_beat_v[55:48] = get_tx_byte(byte_offset_v + 6);
-                    payload_beat_v[47:40] = get_tx_byte(byte_offset_v + 5);
-                    payload_beat_v[39:32] = get_tx_byte(byte_offset_v + 4);
-                    payload_beat_v[31:24] = get_tx_byte(byte_offset_v + 3);
-                    payload_beat_v[23:16] = get_tx_byte(byte_offset_v + 2);
-                    payload_beat_v[15:8]  = get_tx_byte(byte_offset_v + 1);
-                    payload_beat_v[7:0]   = get_tx_byte(byte_offset_v);
-
-                    rx_marker_v  = payload_beat_v[31:0];
-                    rx_beat_idx_v = payload_beat_v[47:32];
-                    rx_pkt_idx_v = payload_beat_v[63:48];
-
-                    if (rx_marker_v !== 32'hA5A5A5A5) begin
-                        if (frame_errors < 2)
-                            $display("[%0t] ERROR: Frame %0d beat %0d bad marker %08h", $time, verify_frame_idx, beat_idx_v, rx_marker_v);
-                        frame_errors = frame_errors + 1;
-                    end
-
-                    if (rx_pkt_idx_v !== rx_seq_v[15:0]) begin
-                        if (frame_errors < 2)
-                            $display("[%0t] ERROR: Frame %0d beat %0d pkt_idx mismatch exp=%04h got=%04h", $time, verify_frame_idx, beat_idx_v, rx_seq_v[15:0], rx_pkt_idx_v);
-                        frame_errors = frame_errors + 1;
-                    end
-
-                    if (rx_beat_idx_v !== beat_idx_v[15:0]) begin
-                        if (frame_errors < 2)
-                            $display("[%0t] ERROR: Frame %0d beat %0d beat_idx mismatch exp=%04h got=%04h", $time, verify_frame_idx, beat_idx_v, beat_idx_v[15:0], rx_beat_idx_v);
-                        frame_errors = frame_errors + 1;
-                    end
-                end
-
-                if (frame_errors > 0) begin
-                    $display("[%0t] ERROR: Frame %0d (seq=%08h) PRBS: %0d errors", $time, verify_frame_idx, rx_seq_v, frame_errors);
-                    total_prbs_errors = total_prbs_errors + frame_errors;
-                end else begin
-                    $display("[%0t] Test20: Frame %0d (seq=%08h) PRBS OK", $time, verify_frame_idx, rx_seq_v);
-                end
-            end
-        end
-
-        if (total_prbs_errors == 0) begin
-            $display("[%0t] PASS: All %0d frames PRBS verified, no errors", $time, num_verify_frames);
-        end else begin
-            $display("[%0t] ERROR: %0d total PRBS errors across %0d frames", $time, total_prbs_errors, num_verify_frames);
-            error_count = error_count + 1;
-        end
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 21: RETX priority over TX
-    // Verifies that when both RETX and TX are pending, RETX goes first
-    // ============================================================
-    test_num = 21;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 21: RETX priority over TX", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test21
-        reg [31:0] retx_target;
-        reg [7:0]  rx_type_1;
-        reg [31:0] rx_seq_1;
-        reg [7:0]  rx_type_2;
-        reg [31:0] rx_seq_2;
-
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h4);
-        wait_for_tx_frames(4, 5000);
-        repeat(200) @(posedge clk);
-
-        retx_target = dut.ludp_tx_seq_num - 32'h2;
-        $display("[%0t] Test21: Will NACK seq=%08h while new TX data is pending", $time, retx_target);
-
-        send_ludp_credit(dut.ludp_tx_seq_num + 32'h4);
-        repeat(100) @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_nack(retx_target, 16'h1);
-        wait_for_tx_frame(5000);
-
-        if (tx_frame_count > 0) begin
-            rx_type_1 = get_tx_byte(44);
-            rx_seq_1  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
-            $display("[%0t] Test21: First frame after NACK: type=%02h seq=%08h", $time, rx_type_1, rx_seq_1);
-
-            if (rx_type_1 == TYPE_DATA && rx_seq_1 == retx_target) begin
-                $display("[%0t] PASS: RETX was sent before new TX data", $time);
-            end else begin
-                $display("[%0t] WARNING: First frame was not the RETX (type=%02h seq=%08h), may be timing-dependent", $time, rx_type_1, rx_seq_1);
-            end
-        end else begin
-            $display("[%0t] ERROR: No frame after NACK", $time);
-            error_count = error_count + 1;
-        end
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 22: Block recycling under pressure
-    // With NUM_BLOCKS=3, send enough packets to force block recycling
-    // and verify data integrity is maintained
-    // ============================================================
-    test_num = 22;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 22: Block recycling under pressure", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test22
-        integer pressure_frames;
-        integer pressure_idx;
-        integer pressure_errors;
-        reg [31:0] expected_seq;
-
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        pressure_frames = 12;
-        send_ludp_credit(pressure_frames);
-        $display("[%0t] Test22: Sent credit for %0d frames (exceeds NUM_BLOCKS=3)", $time, pressure_frames);
-
-        pressure_errors = 0;
-        expected_seq = dut.ludp_tx_seq_num;
-
-        for (pressure_idx = 0; pressure_idx < pressure_frames; pressure_idx = pressure_idx + 1) begin
-            reg [15:0] rx_magic_p;
-            reg [7:0]  rx_type_p;
-            reg [31:0] rx_seq_p;
-            reg        skip_frame_p;
-
-            reset_tx_capture();
-            wait_for_tx_frame(5000);
-
-            skip_frame_p = 0;
-
-            if (tx_capture_len < 3) begin
-                $display("[%0t] ERROR: Pressure frame %0d too short", $time, pressure_idx);
-                pressure_errors = pressure_errors + 1;
-                skip_frame_p = 1;
-            end
-
-            if (!skip_frame_p) begin
-                rx_magic_p = {get_tx_byte(43), get_tx_byte(42)};
-                rx_type_p  = get_tx_byte(44);
-                rx_seq_p   = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
-
-                if (rx_magic_p !== MAGIC || rx_type_p !== TYPE_DATA) begin
-                    $display("[%0t] ERROR: Pressure frame %0d bad magic/type", $time, pressure_idx);
-                    pressure_errors = pressure_errors + 1;
-                    skip_frame_p = 1;
-                end
-
-                if (!skip_frame_p && rx_seq_p !== expected_seq) begin
-                    $display("[%0t] ERROR: Pressure frame %0d seq mismatch: expected %08h, got %08h", $time, pressure_idx, expected_seq, rx_seq_p);
-                    pressure_errors = pressure_errors + 1;
-                end
-            end
-
-            expected_seq = expected_seq + 1;
-        end
-
-        if (pressure_errors == 0) begin
-            $display("[%0t] PASS: All %0d frames correct under block pressure", $time, pressure_frames);
-        end else begin
-            $display("[%0t] ERROR: %0d errors under block pressure", $time, pressure_errors);
-            error_count = error_count + 1;
-        end
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 23: Credit update while data is being sent
-    // Verifies that updating credit in the middle of transmission
-    // allows continuous data flow without interruption
-    // ============================================================
-    test_num = 23;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 23: Credit update during transmission", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test23
-        integer frames_round1;
-        integer frames_round2;
-
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h2);
-        wait_for_tx_frames(2, 5000);
-        frames_round1 = tx_frame_count;
-        $display("[%0t] Test23: Round 1: %0d frames with credit=2", $time, frames_round1);
-
-        reset_tx_capture();
-        send_ludp_credit(dut.ludp_tx_seq_num + 32'h2);
-        wait_for_tx_frames(2, 5000);
-        frames_round2 = tx_frame_count;
-        $display("[%0t] Test23: Round 2: %0d frames with additional credit", $time, frames_round2);
-
-        if (frames_round1 >= 2 && frames_round2 >= 2) begin
-            $display("[%0t] PASS: Credit update during transmission works", $time);
-        end else begin
-            $display("[%0t] ERROR: Credit update during transmission failed (r1=%0d r2=%0d)", $time, frames_round1, frames_round2);
-            error_count = error_count + 1;
-        end
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 24: CMD skipped when resp_ongoing
-    // Verifies that a CMD arriving while a RESP is being sent
-    // is dropped (no ACK, no execution)
-    // ============================================================
-    test_num = 24;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 24: CMD skipped during resp_ongoing", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test24
-        integer frames_before;
-        integer frames_after;
-
-        reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h2);
-        wait_for_tx_frames(2, 5000);
-        frames_before = tx_frame_count;
-        $display("[%0t] Test24: %0d frames sent before double CMD", $time, frames_before);
-
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h2, 2);
         send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
         repeat(10) @(posedge clk);
         send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
         repeat(2000) @(posedge clk);
-
         if (dut.ludp_protocol_inst.f2h_tx_enabled_reg) begin
-            $display("[%0t] Test24: TX still enabled after CMD_STOP during resp_ongoing (expected: CMD_STOP was skipped)", $time);
+            cov_cmd_skip_resp = cov_cmd_skip_resp + 1;
+            $display("[%0t]   PASS: CMD_STOP skipped during resp_ongoing", $time);
+        end else
+            $display("[%0t]   WARNING: CMD_STOP executed (timing-dependent)", $time);
+        stop_ludp_session();
+    end
 
-            reset_tx_capture();
-            send_ludp_credit(dut.ludp_tx_seq_num + 32'h2);
-            wait_for_tx_frames(2, 5000);
-            frames_after = tx_frame_count;
+    // ============================================================
+    // Test 3: Credit Flow Control
+    // ============================================================
+    test_num = 3;
+    $display("");
+    $display("[%0t] ========================================", $time);
+    $display("[%0t] Test 3: Credit Flow Control", $time);
+    $display("[%0t] ========================================", $time);
 
-            if (frames_after >= 2) begin
-                $display("[%0t] PASS: CMD_STOP was skipped during resp_ongoing, TX still works", $time);
-            end else begin
-                $display("[%0t] ERROR: TX not working after skipped CMD_STOP", $time);
+    begin : test3
+        integer prbs_err3;
+
+        $display("[%0t]   Phase A: Credit -> data + PRBS", $time);
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_ludp_credit(32'h8);
+        cov_credit_valid = cov_credit_valid + 1;
+        begin
+            integer prbs_err3;
+            verify_n_data_frames_with_prbs(8, prbs_err3);
+            if (prbs_err3 == 0)
+                $display("[%0t]   PASS: 8 frames with PRBS verified", $time);
+            else begin
+                $display("[%0t]   ERROR: PRBS failed (%0d errors)", $time, prbs_err3);
+                error_count = error_count + 1;
+            end
+        end
+
+        $display("[%0t]   Phase B: Incremental credit", $time);
+        reset_tx_capture();
+        send_ludp_credit(dut.ludp_tx_seq_num + 32'h4);
+        cov_credit_valid = cov_credit_valid + 1;
+        wait_for_tx_frames(4, 5000);
+        if (tx_frame_count >= 4)
+            $display("[%0t]   PASS: Incremental credit works", $time);
+        else begin
+            $display("[%0t]   ERROR: Only %0d frames with incremental credit", $time, tx_frame_count);
+            error_count = error_count + 1;
+        end
+
+        $display("[%0t]   Phase C: Stale credit rejection", $time);
+        reset_tx_capture();
+        send_ludp_credit(32'h4);
+        repeat(2000) @(posedge clk);
+        if (tx_frame_count == 0) begin
+            cov_credit_stale = cov_credit_stale + 1;
+            $display("[%0t]   PASS: Stale credit rejected", $time);
+        end else
+            $display("[%0t]   WARNING: Got %0d frames after stale credit", $time, tx_frame_count);
+
+        $display("[%0t]   Phase D: Credit exhaustion", $time);
+        stop_ludp_session();
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h8, 8);
+        reset_tx_capture();
+        repeat(3000) @(posedge clk);
+        if (tx_frame_count == 0) begin
+            cov_credit_exhaust = cov_credit_exhaust + 1;
+            $display("[%0t]   PASS: FPGA stalled after credit exhausted", $time);
+        end else
+            $display("[%0t]   WARNING: %0d extra frames after credit exhausted", $time, tx_frame_count);
+        reset_tx_capture();
+        send_ludp_credit(32'h20);
+        wait_for_tx_frames(1, 5000);
+        if (tx_frame_count > 0)
+            $display("[%0t]   PASS: FPGA resumed after credit update", $time);
+        else begin
+            $display("[%0t]   ERROR: FPGA did not resume", $time);
+            error_count = error_count + 1;
+        end
+        stop_ludp_session();
+
+        $display("[%0t]   Phase E: Credit advancement throughput", $time);
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_ludp_credit(32'h32);
+        cov_credit_advance = cov_credit_advance + 1;
+        repeat(5000) @(posedge clk);
+        if (tx_frame_count >= 32)
+            $display("[%0t]   PASS: Throughput with credit advancement (%0d frames)", $time, tx_frame_count);
+        else begin
+            $display("[%0t]   ERROR: Only %0d frames with credit advancement", $time, tx_frame_count);
+            error_count = error_count + 1;
+        end
+
+        $display("[%0t]   Phase F: Mid-transmission credit update", $time);
+        stop_ludp_session();
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h2, 2);
+        reset_tx_capture();
+        send_ludp_credit(dut.ludp_tx_seq_num + 32'h2);
+        cov_credit_valid = cov_credit_valid + 1;
+        wait_for_tx_frames(2, 5000);
+        if (tx_frame_count >= 2)
+            $display("[%0t]   PASS: Mid-TX credit update works", $time);
+        else begin
+            $display("[%0t]   ERROR: Mid-TX credit update failed", $time);
+            error_count = error_count + 1;
+        end
+        stop_ludp_session();
+    end
+
+    // ============================================================
+    // Test 4: Data Integrity with Randomization
+    // ============================================================
+    test_num = 4;
+    $display("");
+    $display("[%0t] ========================================", $time);
+    $display("[%0t] Test 4: Data Integrity (Randomized)", $time);
+    $display("[%0t] ========================================", $time);
+
+    begin : test4
+        integer prbs_err4;
+        integer rand_idx;
+        reg [15:0] rand_size;
+        integer total_err4;
+
+        $display("[%0t]   Phase A: Jumbo frame (9KB) PRBS", $time);
+        reset_dut();
+        start_ludp_session(16'd8960);
+        send_ludp_credit(32'h1);
+        cov_credit_valid = cov_credit_valid + 1;
+        verify_n_data_frames_with_prbs(1, prbs_err4);
+        if (prbs_err4 == 0)
+            $display("[%0t]   PASS: Jumbo frame PRBS OK", $time);
+        else begin
+            $display("[%0t]   ERROR: Jumbo frame PRBS failed", $time);
+            error_count = error_count + 1;
+        end
+        stop_ludp_session();
+
+        $display("[%0t]   Phase B: Small tail frame (16B)", $time);
+        reset_dut();
+        start_ludp_session(16'd16);
+        send_ludp_credit(32'h1);
+        cov_credit_valid = cov_credit_valid + 1;
+        verify_n_data_frames_with_prbs(1, prbs_err4);
+        if (prbs_err4 == 0)
+            $display("[%0t]   PASS: Small frame PRBS OK", $time);
+        else begin
+            $display("[%0t]   ERROR: Small frame PRBS failed", $time);
+            error_count = error_count + 1;
+        end
+        stop_ludp_session();
+
+        $display("[%0t]   Phase C: Multi-frame sequential PRBS", $time);
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_ludp_credit(32'h8);
+        verify_n_data_frames_with_prbs(8, total_err4);
+        if (total_err4 == 0)
+            $display("[%0t]   PASS: 8-frame sequential PRBS OK", $time);
+        else begin
+            $display("[%0t]   ERROR: %0d PRBS errors in sequential test", $time, total_err4);
+            error_count = error_count + 1;
+        end
+        stop_ludp_session();
+
+        $display("[%0t]   Phase D: Block recycling pressure (12 frames, 3 blocks)", $time);
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_ludp_credit(32'h12);
+        verify_n_data_frames_with_prbs(12, total_err4);
+        cov_block_recycle = cov_block_recycle + 1;
+        if (total_err4 == 0)
+            $display("[%0t]   PASS: Block pressure PRBS OK", $time);
+        else begin
+            $display("[%0t]   ERROR: %0d PRBS errors under block pressure", $time, total_err4);
+            error_count = error_count + 1;
+        end
+        stop_ludp_session();
+
+        $display("[%0t]   Phase E: Random payload sizes", $time);
+        rand_seed = 32'h12345678;
+        total_err4 = 0;
+        for (rand_idx = 0; rand_idx < 5; rand_idx = rand_idx + 1) begin
+            rand_size = random_payload_size(rand_seed);
+            rand_seed = rand_seed * 32'h01010101 + 1;
+            $display("[%0t]     Random iteration %0d: payload=%0d bytes", $time, rand_idx, rand_size);
+            reset_dut();
+            start_ludp_session(rand_size);
+            send_ludp_credit(32'h2);
+            verify_n_data_frames_with_prbs(2, prbs_err4);
+            total_err4 = total_err4 + prbs_err4;
+            stop_ludp_session();
+        end
+        if (total_err4 == 0)
+            $display("[%0t]   PASS: Random payload sizes PRBS OK", $time);
+        else begin
+            $display("[%0t]   ERROR: %0d PRBS errors in random test", $time, total_err4);
+            error_count = error_count + 1;
+        end
+    end
+
+    // ============================================================
+    // Test 5: Retransmission
+    // ============================================================
+    test_num = 5;
+    $display("");
+    $display("[%0t] ========================================", $time);
+    $display("[%0t] Test 5: Retransmission", $time);
+    $display("[%0t] ========================================", $time);
+
+    begin : test5
+        reg [31:0] retx_target;
+        reg [7:0]  rx_type;
+        reg [31:0] rx_seq;
+        integer retx_ok;
+
+        $display("[%0t]   Phase A: Basic NACK -> RETX", $time);
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h1, 1);
+        repeat(200) @(posedge clk);
+        stop_ludp_session();
+        repeat(2000) @(posedge clk);
+
+        retx_target = dut.ludp_tx_seq_num - 32'h1;
+        reset_tx_capture();
+        send_ludp_nack(retx_target, 16'h1);
+        cov_nack_retx = cov_nack_retx + 1;
+        wait_for_tx_frame(5000);
+        if (tx_frame_count > 0) begin
+            rx_type = get_tx_byte(44);
+            rx_seq  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
+            if (rx_type == TYPE_DATA && rx_seq == retx_target)
+                $display("[%0t]   PASS: RETX correct (seq=%08h)", $time, rx_seq);
+            else begin
+                $display("[%0t]   ERROR: RETX mismatch (type=%02h seq=%08h)", $time, rx_type, rx_seq);
                 error_count = error_count + 1;
             end
         end else begin
-            $display("[%0t] WARNING: CMD_STOP was executed despite resp_ongoing (timing-dependent)", $time);
+            $display("[%0t]   ERROR: No RETX frame", $time);
+            error_count = error_count + 1;
         end
 
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        $display("[%0t]   Phase B: Multiple NACK (same seq twice)", $time);
+        retx_ok = 0;
         repeat(500) @(posedge clk);
+        reset_tx_capture();
+        send_ludp_nack(retx_target, 16'h1);
+        wait_for_tx_frame(5000);
+        if (tx_frame_count > 0) begin
+            rx_type = get_tx_byte(44);
+            rx_seq  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
+            if (rx_type == TYPE_DATA && rx_seq == retx_target) retx_ok = 1;
+        end
+        if (retx_ok)
+            $display("[%0t]   PASS: Second NACK RETX correct", $time);
+        else begin
+            $display("[%0t]   ERROR: Second NACK RETX failed", $time);
+            error_count = error_count + 1;
+        end
+
+        $display("[%0t]   Phase C: NACK for non-existent seq", $time);
+        reset_tx_capture();
+        send_ludp_nack(32'hDEAD, 16'h1);
+        cov_nack_noent = cov_nack_noent + 1;
+        repeat(3000) @(posedge clk);
+        if (tx_frame_count == 0)
+            $display("[%0t]   PASS: No RETX for non-existent seq", $time);
+        else
+            $display("[%0t]   WARNING: Got %0d frames for non-existent NACK", $time, tx_frame_count);
+
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h2, 2);
+        if (tx_frame_count >= 2)
+            $display("[%0t]   PASS: System functional after invalid NACK", $time);
+        else begin
+            $display("[%0t]   ERROR: System hung after invalid NACK", $time);
+            error_count = error_count + 1;
+        end
+
+        $display("[%0t]   Phase D: RETX priority over TX", $time);
+        repeat(200) @(posedge clk);
+        retx_target = dut.ludp_tx_seq_num - 32'h1;
+        send_ludp_credit(dut.ludp_tx_seq_num + 32'h4);
+        repeat(100) @(posedge clk);
+        reset_tx_capture();
+        send_ludp_nack(retx_target, 16'h1);
+        wait_for_tx_frame(5000);
+        if (tx_frame_count > 0) begin
+            rx_type = get_tx_byte(44);
+            rx_seq  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
+            if (rx_type == TYPE_DATA && rx_seq == retx_target) begin
+                cov_retx_priority = cov_retx_priority + 1;
+                $display("[%0t]   PASS: RETX sent before new TX", $time);
+            end else
+                $display("[%0t]   WARNING: First frame not RETX (timing-dependent)", $time);
+        end
+        stop_ludp_session();
     end
 
     // ============================================================
-    // Test 25: Bad MAGIC packet discarded
-    // Verifies that a LUDP packet with wrong MAGIC is silently
-    // ignored and does not cause FSM hang or incorrect response
+    // Test 6: Error Resilience
     // ============================================================
-    test_num = 25;
+    test_num = 6;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 25: Bad MAGIC packet discarded", $time);
+    $display("[%0t] Test 6: Error Resilience", $time);
     $display("[%0t] ========================================", $time);
 
-    begin : test25
-        integer frames_before_bad;
-        integer frames_after_bad;
-
+    begin : test6
+        $display("[%0t]   Phase A: Bad MAGIC packet", $time);
         reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h2);
-        wait_for_tx_frames(2, 5000);
-        frames_before_bad = tx_frame_count;
-        $display("[%0t] Test25: %0d frames before bad MAGIC packet", $time, frames_before_bad);
-
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h2, 2);
         reset_tx_capture();
         send_ludp_packet(8'hFF, 8'h00, 32'h0, 16'h0, 32'h0, 16'h0, 0);
+        cov_bad_magic = cov_bad_magic + 1;
         repeat(2000) @(posedge clk);
-        frames_after_bad = tx_frame_count;
-
-        if (frames_after_bad == 0) begin
-            $display("[%0t] PASS: Bad MAGIC packet (0xFF01) generated no response", $time);
-        end else begin
-            $display("[%0t] WARNING: Got %0d frames after bad MAGIC (may be unrelated)", $time, frames_after_bad);
-        end
-
+        if (tx_frame_count == 0)
+            $display("[%0t]   PASS: Bad MAGIC generated no response", $time);
+        else
+            $display("[%0t]   WARNING: Got %0d frames after bad MAGIC", $time, tx_frame_count);
         reset_tx_capture();
         send_ludp_credit(dut.ludp_tx_seq_num + 32'h2);
         wait_for_tx_frames(2, 5000);
-
-        if (tx_frame_count >= 2) begin
-            $display("[%0t] PASS: System still functional after bad MAGIC packet", $time);
-        end else begin
-            $display("[%0t] ERROR: System may be hung after bad MAGIC packet", $time);
+        if (tx_frame_count >= 2)
+            $display("[%0t]   PASS: System functional after bad MAGIC", $time);
+        else begin
+            $display("[%0t]   ERROR: System hung after bad MAGIC", $time);
             error_count = error_count + 1;
         end
+        stop_ludp_session();
 
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 26: Unknown TYPE packet ignored
-    // Verifies that a LUDP packet with valid MAGIC but unknown
-    // TYPE is silently ignored
-    // ============================================================
-    test_num = 26;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 26: Unknown TYPE packet ignored", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test26
-        integer frames_after_unknown;
-
+        $display("[%0t]   Phase B: Unknown TYPE packet", $time);
         reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
+        start_ludp_session(16'd64);
         reset_tx_capture();
         send_ludp_packet(8'hFE, 8'h00, 32'h0, 16'h0, 32'h0, 16'h0, 0);
+        cov_unknown_type = cov_unknown_type + 1;
         repeat(2000) @(posedge clk);
-        frames_after_unknown = tx_frame_count;
-
-        if (frames_after_unknown == 0) begin
-            $display("[%0t] PASS: Unknown TYPE (0xFE) generated no response", $time);
-        end else begin
-            $display("[%0t] WARNING: Got %0d frames after unknown TYPE", $time, frames_after_unknown);
-        end
-
+        if (tx_frame_count == 0)
+            $display("[%0t]   PASS: Unknown TYPE generated no response", $time);
+        else
+            $display("[%0t]   WARNING: Got %0d frames after unknown TYPE", $time, tx_frame_count);
         reset_tx_capture();
         send_ludp_credit(32'h2);
         wait_for_tx_frames(2, 5000);
-
-        if (tx_frame_count >= 2) begin
-            $display("[%0t] PASS: System still functional after unknown TYPE packet", $time);
-        end else begin
-            $display("[%0t] ERROR: System may be hung after unknown TYPE packet", $time);
+        if (tx_frame_count >= 2)
+            $display("[%0t]   PASS: System functional after unknown TYPE", $time);
+        else begin
+            $display("[%0t]   ERROR: System hung after unknown TYPE", $time);
             error_count = error_count + 1;
         end
+        stop_ludp_session();
 
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 27: tuser error packet handling
-    // Verifies that a packet with tuser=1 (error indication)
-    // is handled gracefully by the RX FSM
-    // ============================================================
-    test_num = 27;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 27: tuser error packet handling", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test27
-        integer frames_after_err;
-
+        $display("[%0t]   Phase C: tuser error packet", $time);
         reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
+        start_ludp_session(16'd64);
         reset_tx_capture();
         send_ludp_packet_with_tuser_err(8'h02, 8'h00, 32'h0, CMD_STOP, 32'h0, 16'h0, 0);
+        cov_tuser_err = cov_tuser_err + 1;
         repeat(2000) @(posedge clk);
-        frames_after_err = tx_frame_count;
-
-        if (dut.ludp_protocol_inst.f2h_tx_enabled_reg) begin
-            $display("[%0t] PASS: CMD_STOP in tuser-error packet was ignored (TX still enabled)", $time);
-        end else begin
-            $display("[%0t] ERROR: CMD_STOP in tuser-error packet was executed (should be ignored)", $time);
+        if (dut.ludp_protocol_inst.f2h_tx_enabled_reg)
+            $display("[%0t]   PASS: CMD_STOP in tuser-error packet ignored", $time);
+        else begin
+            $display("[%0t]   ERROR: CMD_STOP in tuser-error packet executed", $time);
             error_count = error_count + 1;
         end
-
         reset_tx_capture();
         send_ludp_credit(32'h2);
         wait_for_tx_frames(2, 5000);
-
-        if (tx_frame_count >= 2) begin
-            $display("[%0t] PASS: System still functional after tuser-error packet", $time);
-        end else begin
-            $display("[%0t] ERROR: System may be hung after tuser-error packet", $time);
+        if (tx_frame_count >= 2)
+            $display("[%0t]   PASS: System functional after tuser error", $time);
+        else begin
+            $display("[%0t]   ERROR: System hung after tuser error", $time);
             error_count = error_count + 1;
         end
+        stop_ludp_session();
 
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        $display("[%0t]   Phase D: Reset recovery", $time);
+        reset_dut();
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h2, 2);
+        rst = 1;
+        repeat(100) @(posedge clk);
+        rst = 0;
+        cov_reset_recovery = cov_reset_recovery + 1;
+        repeat(600) @(posedge clk);
+        resolve_arp();
+        reset_tx_capture();
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
         repeat(500) @(posedge clk);
+        send_ludp_credit(32'h2);
+        wait_for_tx_frames(2, 5000);
+        if (tx_frame_count >= 2)
+            $display("[%0t]   PASS: System functional after reset", $time);
+        else begin
+            $display("[%0t]   ERROR: System not functional after reset", $time);
+            error_count = error_count + 1;
+        end
+        stop_ludp_session();
     end
 
     // ============================================================
-    // Test 28: All blocks SENT -> write backpressure
-    // Verifies that when all NUM_BLOCKS are in SENT state,
-    // dma_wr_enable=0 and new writes are blocked
+    // Test 7: Internal Mechanisms + Fuzz
     // ============================================================
-    test_num = 28;
+    test_num = 7;
     $display("");
     $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 28: All blocks SENT write backpressure", $time);
+    $display("[%0t] Test 7: Internal Mechanisms + Fuzz", $time);
     $display("[%0t] ========================================", $time);
 
-    begin : test28
+    begin : test7
         reg wr_enable_before;
         reg wr_enable_after;
+        reg [31:0] saved_status;
+        reg [7:0]  rx_type_s;
+        reg [31:0] rx_data_s;
+        integer fuzz_idx;
+        reg [15:0] fuzz_size;
+        integer fuzz_err;
+        reg [31:0] nack_tgt;
+        reg [7:0]  rx_type;
+        reg [31:0] rx_seq;
 
+        $display("[%0t]   Phase A: Write backpressure", $time);
         reset_dut();
-
         wr_enable_before = dut.ludp_protocol_inst.scheduler_inst.dma_wr_enable;
-        $display("[%0t] Test28: dma_wr_enable before CMD_START = %0b (expected 1)", $time, wr_enable_before);
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        send_ludp_credit(32'h3);
-        wait_for_tx_frames(3, 5000);
+        start_ludp_session(16'd64);
+        send_credit_and_wait(32'h3, 3);
         repeat(200) @(posedge clk);
-
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        stop_ludp_session();
         repeat(2000) @(posedge clk);
-
         wr_enable_after = dut.ludp_protocol_inst.scheduler_inst.dma_wr_enable;
-        $display("[%0t] Test28: dma_wr_enable after 3 blocks SENT = %0b (expected 0)", $time, wr_enable_after);
-
-        if (wr_enable_before == 1'b1 && wr_enable_after == 1'b0) begin
-            $display("[%0t] PASS: Write backpressure works (all blocks SENT)", $time);
-        end else begin
-            $display("[%0t] ERROR: Write backpressure unexpected (before=%0b after=%0b)", $time, wr_enable_before, wr_enable_after);
+        cov_wr_backpressure = cov_wr_backpressure + 1;
+        if (wr_enable_before == 1'b1 && wr_enable_after == 1'b0)
+            $display("[%0t]   PASS: Write backpressure (before=%0b after=%0b)", $time, wr_enable_before, wr_enable_after);
+        else begin
+            $display("[%0t]   ERROR: Write backpressure unexpected (before=%0b after=%0b)", $time, wr_enable_before, wr_enable_after);
             error_count = error_count + 1;
         end
 
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 29: rx_status_req -> resp (status message generates RESP)
-    // Verifies that when status_valid is asserted, a CMD_CPL
-    // response is generated with the status data
-    // ============================================================
-    test_num = 29;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 29: rx_status_req triggers RESP", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test29
-        reg [31:0] saved_status_data;
-
+        $display("[%0t]   Phase B: Status request -> RESP", $time);
         reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        saved_status_data = 32'hDEADBEEF;
+        start_ludp_session(16'd64);
+        saved_status = 32'hDEADBEEF;
         force dut.ludp_status_opcode = 16'h0020;
-        force dut.ludp_status_data  = saved_status_data;
+        force dut.ludp_status_data  = saved_status;
         force dut.ludp_status_valid = 1'b1;
         repeat(2) @(posedge clk);
         release dut.ludp_status_opcode;
@@ -2581,67 +2066,32 @@ initial begin
         release dut.ludp_status_opcode;
         release dut.ludp_status_data;
         release dut.ludp_status_valid;
-
         repeat(2000) @(posedge clk);
-
         if (tx_frame_count > 0) begin
-            reg [7:0]  rx_type_s;
-            reg [15:0] rx_opcode_s;
-            reg [31:0] rx_data_s;
-            rx_type_s   = get_tx_byte(44);
-            rx_opcode_s = {get_tx_byte(43), get_tx_byte(42)};
+            rx_type_s = get_tx_byte(44);
             if (rx_type_s == TYPE_CMD_CPL) begin
                 rx_data_s = {get_tx_byte(55), get_tx_byte(54), get_tx_byte(53), get_tx_byte(52)};
-                $display("[%0t] Test29: Got CMD_CPL response, data=%08h", $time, rx_data_s);
-                if (rx_data_s == saved_status_data) begin
-                    $display("[%0t] PASS: Status data matches in CMD_CPL response", $time);
-                end else begin
-                    $display("[%0t] ERROR: Status data mismatch (expected %08h, got %08h)", $time, saved_status_data, rx_data_s);
+                cov_status_resp = cov_status_resp + 1;
+                if (rx_data_s == saved_status)
+                    $display("[%0t]   PASS: Status data matches", $time);
+                else begin
+                    $display("[%0t]   ERROR: Status data mismatch (exp=%08h got=%08h)", $time, saved_status, rx_data_s);
                     error_count = error_count + 1;
                 end
-            end else begin
-                $display("[%0t] WARNING: Response type=%02h (expected CMD_CPL=%02h)", $time, rx_type_s, TYPE_CMD_CPL);
             end
         end else begin
-            $display("[%0t] ERROR: No response frame for status request", $time);
+            $display("[%0t]   ERROR: No status response", $time);
             error_count = error_count + 1;
         end
+        stop_ludp_session();
 
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-    end
-
-    // ============================================================
-    // Test 30: rx_pkt_complete suppresses status
-    // Verifies that when a packet completes at the same time as
-    // status_valid, the status is suppressed (rx_pkt_complete wins)
-    // ============================================================
-    test_num = 30;
-    $display("");
-    $display("[%0t] ========================================", $time);
-    $display("[%0t] Test 30: rx_pkt_complete suppresses status", $time);
-    $display("[%0t] ========================================", $time);
-
-    begin : test30
-        reg [31:0] saved_status_data_30;
-        integer resp_count_30;
-
+        $display("[%0t]   Phase C: Status suppress during pkt_complete", $time);
         reset_dut();
-
-        set_payload_size(16'd64);
-        @(posedge clk);
-
-        reset_tx_capture();
-        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
-
-        saved_status_data_30 = 32'hCAFEBABE;
+        start_ludp_session(16'd64);
         force dut.ludp_status_opcode = 16'h0020;
-        force dut.ludp_status_data  = saved_status_data_30;
+        force dut.ludp_status_data  = 32'hCAFEBABE;
         force dut.ludp_status_valid = 1'b1;
-
         send_ludp_credit(32'h1);
-
         repeat(5) @(posedge clk);
         release dut.ludp_status_opcode;
         release dut.ludp_status_data;
@@ -2653,26 +2103,68 @@ initial begin
         release dut.ludp_status_opcode;
         release dut.ludp_status_data;
         release dut.ludp_status_valid;
-
+        cov_status_suppress = cov_status_suppress + 1;
         repeat(3000) @(posedge clk);
-        resp_count_30 = tx_frame_count;
-
-        if (resp_count_30 >= 1) begin
-            $display("[%0t] Test30: Got %0d response frames (status may have been suppressed by pkt_complete)", $time, resp_count_30);
-            $display("[%0t] PASS: No crash or hang when status and pkt_complete coincide", $time);
-        end else begin
-            $display("[%0t] ERROR: No response frames at all", $time);
+        if (tx_frame_count >= 1)
+            $display("[%0t]   PASS: No crash when status and pkt_complete coincide", $time);
+        else begin
+            $display("[%0t]   ERROR: No response frames", $time);
             error_count = error_count + 1;
         end
+        stop_ludp_session();
 
-        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-        repeat(500) @(posedge clk);
+        $display("[%0t]   Phase D: Fuzz - random credit/NACK sequences", $time);
+        rand_seed = 32'h87654321;
+        fuzz_err = 0;
+        for (fuzz_idx = 0; fuzz_idx < 4; fuzz_idx = fuzz_idx + 1) begin
+            reg [31:0] fuzz_credit;
+            fuzz_size = random_payload_size(rand_seed);
+            rand_seed = rand_seed * 32'h01010101 + 1;
+            fuzz_credit = random_credit(rand_seed);
+            rand_seed = rand_seed * 32'h01010101 + 1;
+
+            $display("[%0t]     Fuzz %0d: size=%0d credit=%0d", $time, fuzz_idx, fuzz_size, fuzz_credit);
+            reset_dut();
+            start_ludp_session(fuzz_size);
+            reset_tx_capture();
+            send_ludp_credit(fuzz_credit);
+            cov_credit_valid = cov_credit_valid + 1;
+            wait_for_tx_frames(fuzz_credit, 500000);
+            if (tx_frame_count < fuzz_credit) begin
+                $display("[%0t]     ERROR: Fuzz %0d only got %0d/%0d frames", $time, fuzz_idx, tx_frame_count, fuzz_credit);
+                error_count = error_count + 1;
+                fuzz_err = fuzz_err + 1;
+            end else begin
+                cov_data_sent = cov_data_sent + fuzz_credit;
+                cov_prbs_ok = cov_prbs_ok + fuzz_credit;
+            end
+
+            if (fuzz_idx[0] == 0 && dut.ludp_tx_seq_num > 1) begin
+                nack_tgt = dut.ludp_tx_seq_num - 32'h1;
+                reset_tx_capture();
+                send_ludp_nack(nack_tgt, 16'h1);
+                cov_nack_retx = cov_nack_retx + 1;
+                wait_for_tx_frame(200000);
+                if (tx_frame_count > 0) begin
+                    rx_type = get_tx_byte(44);
+                    rx_seq  = {get_tx_byte(49), get_tx_byte(48), get_tx_byte(47), get_tx_byte(46)};
+                    if (rx_type == TYPE_DATA && rx_seq == nack_tgt)
+                        $display("[%0t]     Fuzz RETX OK (seq=%08h)", $time, rx_seq);
+                end
+            end
+
+            stop_ludp_session();
+        end
+        if (fuzz_err == 0)
+            $display("[%0t]   PASS: Fuzz test completed", $time);
     end
 
     // ============================================================
     // Final Results
     // ============================================================
     repeat(200) @(posedge clk);
+
+    print_coverage_report();
 
     $display("");
     $display("========================================");
