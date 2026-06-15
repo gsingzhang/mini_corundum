@@ -1,35 +1,20 @@
-# VCS Makefile for fpga_core testbench
-# Supports both DVE and Verdi waveform viewing
-#
-# IMPORTANT NOTE ABOUT WAVEFORMS:
-# This environment runs in a sandboxed/containerized setting where /proc
-# access is restricted. VPD (DVE) and FSDB (Verdi) waveform dumping both
-# require /proc for memory mapping and will segfault in this environment.
-#
-# WORKAROUND: Use 'make sim' for reliable batch simulation. To view
-# waveforms, copy the compiled simv to a non-sandboxed machine and run
-# with waveform dumping there.
-#
-# Alternatively, you can generate VCD format (which uses simpler I/O)
-# by running: make sim-vcd
+# VCS Makefile for fpga_core testbench (UVM-like layered architecture)
 #
 # Usage:
-#   make sim        - Batch simulation without waveform (RELIABLE)
-#   make sim-vcd    - Batch simulation with VCD waveform (may work)
-#   make sim-dve    - Simulation with DVE/VPD waveform (WILL SEGFAULT)
-#   make sim-verdi  - Simulation with Verdi/FSDB waveform (WILL SEGFAULT)
+#   make sim        - Run all tests (batch simulation)
+#   make sim TEST=1 - Run specific test (1-7 or name)
+#   make sim-vcd    - Run with VCD waveform
 #   make clean      - Remove build artifacts
 
-# Testbench settings
 TB_TOP = tb_fpga_core
 DUT = fpga_core
 
-# Directories
 RTL_DIR = ../rtl
 LIB_ETH_DIR = $(RTL_DIR)/lib_eth
 LIB_AXIS_DIR = $(RTL_DIR)/lib_axis
+TB_DIR = .
+TB_LUDP_DIR = ./ludp_tb
 
-# Source files
 VERILOG_SOURCES += $(RTL_DIR)/taxi_axis_if.sv
 VERILOG_SOURCES += $(RTL_DIR)/taxi_axis_arb_mux.sv
 VERILOG_SOURCES += $(RTL_DIR)/taxi_arbiter.sv
@@ -41,7 +26,6 @@ VERILOG_SOURCES += $(RTL_DIR)/ludp_tx_dma.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_tx_scheduler.sv
 VERILOG_SOURCES += $(RTL_DIR)/icmp_echo_reply.sv
 VERILOG_SOURCES += $(RTL_DIR)/$(DUT).v
-# taxi RAM primitive for retx buffer external memory
 VERILOG_SOURCES += $(RTL_DIR)/taxi_prim/taxi_ram_1r1w_1c.sv
 VERILOG_SOURCES += $(LIB_ETH_DIR)/eth_mac_10g_fifo.v
 VERILOG_SOURCES += $(LIB_ETH_DIR)/eth_mac_10g.v
@@ -82,14 +66,26 @@ VERILOG_SOURCES += $(LIB_AXIS_DIR)/axis_async_fifo.v
 VERILOG_SOURCES += $(LIB_AXIS_DIR)/axis_async_fifo_adapter.v
 VERILOG_SOURCES += $(LIB_AXIS_DIR)/sync_reset.v
 
-# Testbench
-VERILOG_SOURCES += $(TB_TOP).v
+# UVM-like testbench components (order matters for package compilation)
+VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_tb_pkg.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/xgmii_if.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/dut_ctrl_if.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_driver.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_monitor.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_sequencer.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_scoreboard.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_coverage.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_env.sv
+VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_test_lib.sv
 
-# VCS settings
+# Top-level testbench
+VERILOG_SOURCES += $(TB_DIR)/tb_fpga_core.sv
+
 VCS = vcs
 VCS_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
     -debug_access+all -kdb \
     +v2k \
+    +v2k_generate \
     +libext+.v+.sv \
     -ignore initializer_driver_checks \
     -CFLAGS "-DVCS" \
@@ -97,68 +93,52 @@ VCS_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
     -top $(TB_TOP) \
     -o simv
 
-# Simulation executable
 SIMV = ./simv
 
-# Targets
-.PHONY: all compile compile-vcd compile-dve compile-verdi \
-        sim sim-vcd sim-dve sim-verdi clean distclean help
+TEST_ARGS =
+
+.PHONY: all compile compile-vcd sim sim-vcd clean distclean help
 
 all: sim
 
 help:
-	@echo "VCS Makefile for fpga_core testbench"
+	@echo "VCS Makefile for fpga_core testbench (UVM-like architecture)"
 	@echo ""
-	@echo "Reliable targets:"
-	@echo "  make sim        - Run batch simulation (no waveform)"
-	@echo "  make sim-vcd    - Run with VCD waveform (simple format, may work)"
-	@echo ""
-	@echo "Waveform targets (require non-sandboxed environment):"
-	@echo "  make sim-dve    - Run with DVE/VPD waveform"
-	@echo "  make sim-verdi  - Run with Verdi/FSDB waveform"
-	@echo ""
-	@echo "Other targets:"
+	@echo "Targets:"
+	@echo "  make sim        - Run all tests"
+	@echo "  make sim TEST=1 - Run test 1 (protocol_basics)"
+	@echo "  make sim TEST=2 - Run test 2 (cmd_lifecycle)"
+	@echo "  make sim TEST=3 - Run test 3 (credit_flow)"
+	@echo "  make sim TEST=4 - Run test 4 (data_integrity)"
+	@echo "  make sim TEST=5 - Run test 5 (retransmission)"
+	@echo "  make sim TEST=6 - Run test 6 (error_resilience)"
+	@echo "  make sim TEST=7 - Run test 7 (internal_mechanisms)"
+	@echo "  make sim-vcd    - Run with VCD waveform"
 	@echo "  make clean      - Remove build artifacts"
-	@echo "  make distclean  - Remove build artifacts + waveform files"
-	@echo ""
-	@echo "NOTE: VPD/FSDB dumping segfaults in this sandboxed environment."
-	@echo "      Use 'make sim' for reliable simulation, or run on a"
-	@echo "      machine with full /proc access for waveforms."
 
-# Generate filelist
 filelist.f: Makefile
 	@echo "Generating filelist..."
 	@rm -f filelist.f
 	@for f in $(VERILOG_SOURCES); do echo "$$f" >> filelist.f; done
 
-# Compile for batch mode (no waveform dump defines)
 compile: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS)
 
-# Compile for VCD waveform (simple format, may work in sandbox)
 compile-vcd: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+VCD_DUMP
 
-# Compile for VPD/DVE waveform
-compile-dve: filelist.f
-	$(VCS) $(VCS_BASE_FLAGS) +define+VPD_DUMP
-
-# Compile for FSDB/Verdi waveform
-compile-verdi: filelist.f
-	$(VCS) $(VCS_BASE_FLAGS) +define+FSDB_DUMP
-
-# Run simulation (batch mode, no waveform)
 sim: compile
-	$(SIMV) -no_save
+	$(SIMV) -no_save $(TEST_ARGS)
 
-# Run simulation with VCD waveform
+sim-test: compile
+	$(SIMV) -no_save +TEST=$(TEST)
+
 sim-vcd: compile-vcd
 	@echo ""
 	@echo "========================================"
 	@echo "Running with VCD waveform..."
 	@echo "========================================"
-	@echo ""
-	$(SIMV) -no_save -l sim-vcd.log
+	$(SIMV) -no_save -l sim-vcd.log $(TEST_ARGS)
 	@echo ""
 	@echo "========================================"
 	@if [ -f $(TB_TOP).vcd ]; then \
@@ -169,87 +149,14 @@ sim-vcd: compile-vcd
 	fi
 	@echo "========================================"
 
-# Run simulation with DVE waveform (VPD format)
-# NOTE: This will likely segfault in sandboxed environments.
-# The simulation binary can be copied to a non-sandboxed machine
-# and run there to generate the VPD file.
-sim-dve: compile-dve
-	@echo ""
-	@echo "========================================"
-	@echo "WARNING: VPD dumping typically fails"
-	@echo "in sandboxed environments due to"
-	@echo "restricted /proc access."
-	@echo ""
-	@echo "If this segfaults, use 'make sim' for"
-	@echo "batch mode, or copy simv to a machine"
-	@echo "with full /proc access."
-	@echo "========================================"
-	@echo ""
-	$(SIMV) -no_save -l sim-dve.log || \
-		(echo ""; \
-		 echo "========================================"; \
-		 echo "VPD dumping failed due to sandbox"; \
-		 echo "restrictions. This is expected."; \
-		 echo ""; \
-		 echo "To get waveforms, either:"; \
-		 echo "  1. Run 'make sim-vcd' for VCD format"; \
-		 echo "  2. Copy simv to non-sandboxed machine"; \
-		 echo "     and run: ./simv +vcdplusfile=out.vpd"; \
-		 echo "========================================"; \
-		 exit 1)
-	@echo ""
-	@echo "========================================"
-	@if [ -f $(TB_TOP).vpd ]; then \
-		echo "DVE waveform generated: $(TB_TOP).vpd"; \
-		echo "View with: dve -vpd $(TB_TOP).vpd &"; \
-	else \
-		echo "VPD file not generated."; \
-	fi
-	@echo "========================================"
+sim-dve: filelist.f
+	$(VCS) $(VCS_BASE_FLAGS) +define+VPD_DUMP
+	$(SIMV) -no_save -l sim-dve.log $(TEST_ARGS)
 
-# Run simulation with Verdi waveform (FSDB format)
-# NOTE: This will likely segfault in sandboxed environments.
-sim-verdi: compile-verdi
-	@echo ""
-	@echo "========================================"
-	@echo "WARNING: FSDB dumping typically fails"
-	@echo "in sandboxed environments due to"
-	@echo "restricted /proc access."
-	@echo "========================================"
-	@echo ""
-	$(SIMV) -no_save -l sim-verdi.log || \
-		(echo ""; \
-		 echo "========================================"; \
-		 echo "FSDB dumping failed due to sandbox"; \
-		 echo "restrictions. This is expected."; \
-		 echo ""; \
-		 echo "To get waveforms, either:"; \
-		 echo "  1. Run 'make sim-vcd' for VCD format"; \
-		 echo "  2. Copy simv to non-sandboxed machine"; \
-		 echo "     and run with +fsdbfile+out.fsdb"; \
-		 echo "========================================"; \
-		 exit 1)
-	@echo ""
-	@echo "========================================"
-	@if [ -f $(TB_TOP).fsdb ]; then \
-		echo "Verdi waveform generated: $(TB_TOP).fsdb"; \
-		echo "View with: verdi -ssf $(TB_TOP).fsdb -dbdir simv.daidir &"; \
-	else \
-		echo "FSDB file not generated."; \
-	fi
-	@echo "========================================"
+sim-verdi: filelist.f
+	$(VCS) $(VCS_BASE_FLAGS) +define+FSDB_DUMP
+	$(SIMV) -no_save -l sim-verdi.log $(TEST_ARGS)
 
-# Run simulation and auto-launch DVE
-dve: compile-dve
-	$(SIMV) -no_save &
-	dve -vpd $(TB_TOP).vpd &
-
-# Run simulation and auto-launch Verdi
-verdi: compile-verdi
-	$(SIMV) -no_save &
-	verdi -ssf $(TB_TOP).fsdb -dbdir simv.daidir &
-
-# Clean
 clean:
 	rm -rf simv simv.daidir csrc
 	rm -rf vc_hdrs.h .vlogansetup.args .vlogansetup.env
@@ -262,7 +169,6 @@ clean:
 	rm -f dve.ucli
 	rm -rf DVEfiles
 
-# Ultra clean (including DVE/Verdi files)
 distclean: clean
 	rm -rf DVEfiles
 	rm -rf verdiLog

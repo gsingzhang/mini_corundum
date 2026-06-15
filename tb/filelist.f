@@ -48,4 +48,14 @@
 ../rtl/lib_axis/axis_async_fifo.v
 ../rtl/lib_axis/axis_async_fifo_adapter.v
 ../rtl/lib_axis/sync_reset.v
-tb_fpga_core.v
+./ludp_tb/ludp_tb_pkg.sv
+./ludp_tb/xgmii_if.sv
+./ludp_tb/dut_ctrl_if.sv
+./ludp_tb/ludp_driver.sv
+./ludp_tb/ludp_monitor.sv
+./ludp_tb/ludp_sequencer.sv
+./ludp_tb/ludp_scoreboard.sv
+./ludp_tb/ludp_coverage.sv
+./ludp_tb/ludp_env.sv
+./ludp_tb/ludp_test_lib.sv
+./tb_fpga_core.sv
