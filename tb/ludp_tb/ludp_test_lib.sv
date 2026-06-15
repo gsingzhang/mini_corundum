@@ -27,138 +27,30 @@ class ludp_test_base extends uvm_test;
     endtask
 
     virtual task run_sequence();
+        string vseq_name;
+        uvm_sequence_base seq;
+        uvm_factory factory;
+        uvm_object_wrapper wrapper;
+
+        factory = uvm_factory::get();
+
+        void'(uvm_cmdline_processor::get_inst().get_arg_value("+UVM_VSEQ=", vseq_name));
+
+        if (vseq_name == "")
+            vseq_name = "test_all_vseq";
+
+        `uvm_info("TEST", $sformatf("Running virtual sequence: %s", vseq_name), UVM_NONE)
+
+        if (!$cast(seq, factory.create_object_by_name(vseq_name, get_full_name(), "seq"))) begin
+            `uvm_error("TEST", $sformatf("Failed to create virtual sequence '%s' via factory. Available: test_all_vseq, protocol_basics_vseq, cmd_lifecycle_vseq, credit_flow_vseq, data_integrity_vseq, retransmission_vseq, error_resilience_vseq, internal_mechanisms_vseq, coverage_enhance_vseq, reset_and_init_vseq", vseq_name))
+            return;
+        end
+
+        seq.start(v_seqr);
     endtask
 
     virtual function void report_phase(uvm_phase phase);
         super.report_phase(phase);
     endfunction
-
-endclass
-
-class test_protocol_basics extends ludp_test_base;
-
-    `uvm_component_utils(test_protocol_basics)
-
-    function new(string name = "test_protocol_basics", uvm_component parent = null);
-        super.new(name, parent);
-    endfunction
-
-    virtual task run_sequence();
-        protocol_basics_vseq seq;
-        seq = protocol_basics_vseq::type_id::create("seq");
-        seq.start(v_seqr);
-    endtask
-
-endclass
-
-class test_cmd_lifecycle extends ludp_test_base;
-
-    `uvm_component_utils(test_cmd_lifecycle)
-
-    function new(string name = "test_cmd_lifecycle", uvm_component parent = null);
-        super.new(name, parent);
-    endfunction
-
-    virtual task run_sequence();
-        cmd_lifecycle_vseq seq;
-        seq = cmd_lifecycle_vseq::type_id::create("seq");
-        seq.start(v_seqr);
-    endtask
-
-endclass
-
-class test_credit_flow extends ludp_test_base;
-
-    `uvm_component_utils(test_credit_flow)
-
-    function new(string name = "test_credit_flow", uvm_component parent = null);
-        super.new(name, parent);
-    endfunction
-
-    virtual task run_sequence();
-        credit_flow_vseq seq;
-        seq = credit_flow_vseq::type_id::create("seq");
-        seq.start(v_seqr);
-    endtask
-
-endclass
-
-class test_data_integrity extends ludp_test_base;
-
-    `uvm_component_utils(test_data_integrity)
-
-    function new(string name = "test_data_integrity", uvm_component parent = null);
-        super.new(name, parent);
-    endfunction
-
-    virtual task run_sequence();
-        data_integrity_vseq seq;
-        seq = data_integrity_vseq::type_id::create("seq");
-        seq.start(v_seqr);
-    endtask
-
-endclass
-
-class test_retransmission extends ludp_test_base;
-
-    `uvm_component_utils(test_retransmission)
-
-    function new(string name = "test_retransmission", uvm_component parent = null);
-        super.new(name, parent);
-    endfunction
-
-    virtual task run_sequence();
-        retransmission_vseq seq;
-        seq = retransmission_vseq::type_id::create("seq");
-        seq.start(v_seqr);
-    endtask
-
-endclass
-
-class test_error_resilience extends ludp_test_base;
-
-    `uvm_component_utils(test_error_resilience)
-
-    function new(string name = "test_error_resilience", uvm_component parent = null);
-        super.new(name, parent);
-    endfunction
-
-    virtual task run_sequence();
-        error_resilience_vseq seq;
-        seq = error_resilience_vseq::type_id::create("seq");
-        seq.start(v_seqr);
-    endtask
-
-endclass
-
-class test_internal_mechanisms extends ludp_test_base;
-
-    `uvm_component_utils(test_internal_mechanisms)
-
-    function new(string name = "test_internal_mechanisms", uvm_component parent = null);
-        super.new(name, parent);
-    endfunction
-
-    virtual task run_sequence();
-        internal_mechanisms_vseq seq;
-        seq = internal_mechanisms_vseq::type_id::create("seq");
-        seq.start(v_seqr);
-    endtask
-
-endclass
-
-class test_all extends ludp_test_base;
-
-    `uvm_component_utils(test_all)
-
-    function new(string name = "test_all", uvm_component parent = null);
-        super.new(name, parent);
-    endfunction
-
-    virtual task run_sequence();
-        test_all_vseq seq;
-        seq = test_all_vseq::type_id::create("seq");
-        seq.start(v_seqr);
-    endtask
 
 endclass

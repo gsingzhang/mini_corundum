@@ -88,7 +88,31 @@ VCS_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
 
 SIMV = ./simv
 
-UVM_TEST = test_all
+UVM_TEST_NAME = ludp_test_base
+
+ifeq ($(TEST),cmd)
+UVM_VSEQ = cmd_lifecycle_vseq
+else ifeq ($(TEST),credit)
+UVM_VSEQ = credit_flow_vseq
+else ifeq ($(TEST),data)
+UVM_VSEQ = data_integrity_vseq
+else ifeq ($(TEST),retx)
+UVM_VSEQ = retransmission_vseq
+else ifeq ($(TEST),error)
+UVM_VSEQ = error_resilience_vseq
+else ifeq ($(TEST),mech)
+UVM_VSEQ = internal_mechanisms_vseq
+else ifeq ($(TEST),basics)
+UVM_VSEQ = protocol_basics_vseq
+else ifeq ($(TEST),cov)
+UVM_VSEQ = coverage_enhance_vseq
+else ifeq ($(TEST),reset)
+UVM_VSEQ = reset_and_init_vseq
+else ifeq ($(TEST),)
+UVM_VSEQ = test_all_vseq
+else
+UVM_VSEQ = $(TEST)
+endif
 
 .PHONY: all compile compile-vcd sim sim-vcd clean distclean help
 
@@ -98,15 +122,19 @@ help:
 	@echo "VCS Makefile for fpga_core testbench (UVM architecture)"
 	@echo ""
 	@echo "Targets:"
-	@echo "  make sim              - Run test_protocol_basics"
-	@echo "  make sim TEST=cmd     - Run test_cmd_lifecycle"
-	@echo "  make sim TEST=credit  - Run test_credit_flow"
-	@echo "  make sim TEST=data    - Run test_data_integrity"
-	@echo "  make sim TEST=retx    - Run test_retransmission"
-	@echo "  make sim TEST=error   - Run test_error_resilience"
-	@echo "  make sim TEST=mech    - Run test_internal_mechanisms"
-	@echo "  make sim-vcd          - Run with VCD waveform"
-	@echo "  make clean            - Remove build artifacts"
+	@echo "  make sim                    - Run test_all_vseq (complete regression)"
+	@echo "  make sim TEST=basics       - Run protocol_basics_vseq"
+	@echo "  make sim TEST=cmd          - Run cmd_lifecycle_vseq"
+	@echo "  make sim TEST=credit       - Run credit_flow_vseq"
+	@echo "  make sim TEST=data         - Run data_integrity_vseq"
+	@echo "  make sim TEST=retx         - Run retransmission_vseq"
+	@echo "  make sim TEST=error        - Run error_resilience_vseq"
+	@echo "  make sim TEST=mech         - Run internal_mechanisms_vseq"
+	@echo "  make sim TEST=cov          - Run coverage_enhance_vseq"
+	@echo "  make sim TEST=reset        - Run reset_and_init_vseq"
+	@echo "  make sim TEST=<vseq_name>  - Run any *_vseq by factory name"
+	@echo "  make sim-vcd                - Run with VCD waveform"
+	@echo "  make clean                  - Remove build artifacts"
 
 filelist.f: Makefile
 	@echo "Generating filelist..."
@@ -120,17 +148,17 @@ compile-vcd: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+VCD_DUMP
 
 sim: compile
-	setarch x86_64 -R $(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW -suppress=ASLR_DETECTED_INFO
+	setarch x86_64 -R $(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW -suppress=ASLR_DETECTED_INFO
 
 sim-test: compile
-	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW
+	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW
 
 sim-vcd: compile-vcd
 	@echo ""
 	@echo "========================================"
 	@echo "Running with VCD waveform..."
 	@echo "========================================"
-	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW -l sim-vcd.log
+	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW -l sim-vcd.log
 	@echo ""
 	@echo "========================================"
 	@if [ -f $(TB_TOP).vcd ]; then \
@@ -143,11 +171,11 @@ sim-vcd: compile-vcd
 
 sim-dve: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+VPD_DUMP
-	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW -l sim-dve.log
+	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW -l sim-dve.log
 
 sim-verdi: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+FSDB_DUMP
-	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW -l sim-verdi.log
+	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW -l sim-verdi.log
 
 clean:
 	rm -rf simv simv.daidir csrc
