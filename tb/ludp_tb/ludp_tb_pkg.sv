@@ -2,8 +2,10 @@
 
 package ludp_tb_pkg;
 
+import uvm_pkg::*;
+`include "uvm_macros.svh"
+
 localparam CLK_PERIOD = 6.4;
-localparam TIMEOUT_CYCLES = 10000000;
 
 localparam [7:0]  XGMII_IDLE    = 8'h07;
 localparam [7:0]  XGMII_START   = 8'hFB;
@@ -41,9 +43,6 @@ localparam ETH_HDR_LEN   = 14;
 localparam IP_HDR_LEN    = 20;
 localparam UDP_HDR_LEN   = 8;
 localparam LUDP_HDR_LEN  = 16;
-localparam IP_HDR_OFFSET = 14;
-localparam UDP_HDR_OFFSET = 34;
-localparam LUDP_HDR_OFFSET = 42;
 
 typedef enum int {
     FRAME_ARP_REQUEST  = 0,
@@ -59,8 +58,23 @@ typedef enum int {
     FRAME_UNKNOWN      = 10
 } frame_type_e;
 
-class ludp_txn;
+typedef enum int {
+    CMD_ARP_REQUEST  = 0,
+    CMD_ARP_REPLY    = 1,
+    CMD_LUDP_CMD     = 2,
+    CMD_LUDP_CREDIT  = 3,
+    CMD_LUDP_NACK    = 4,
+    CMD_LUDP_START   = 5,
+    CMD_LUDP_STOP    = 6,
+    CMD_ICMP_REQUEST = 7,
+    CMD_IDLE         = 8,
+    CMD_RESET        = 9
+} stim_cmd_e;
+
+class ludp_txn extends uvm_sequence_item;
+
     rand frame_type_e frame_type;
+    rand stim_cmd_e   stim_cmd;
 
     rand bit [7:0]  pkt_type;
     rand bit [7:0]  flags;
@@ -79,6 +93,11 @@ class ludp_txn;
 
     rand bit tuser_err;
 
+    rand bit [15:0] payload_size;
+    rand bit [31:0] credit;
+    rand bit [31:0] nack_seq;
+    rand bit [15:0] nack_count;
+
     constraint pkt_type_c {
         pkt_type inside {TYPE_DATA, TYPE_CMD, TYPE_NACK, TYPE_CMD_ACK, TYPE_CMD_CPL, TYPE_CREDIT};
     }
@@ -89,26 +108,54 @@ class ludp_txn;
         payload_len % 8 == 0;
     }
 
-    constraint payload_size_match {
-        payload.size() == payload_len;
+    constraint payload_size_c {
+        payload_size inside {16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8960};
     }
 
-    function new();
+    constraint credit_c {
+        credit inside {[1:32]};
+    }
+
+    `uvm_object_utils_begin(ludp_txn)
+        `uvm_field_enum(frame_type_e, frame_type, UVM_DEFAULT)
+        `uvm_field_enum(stim_cmd_e, stim_cmd, UVM_DEFAULT)
+        `uvm_field_int(pkt_type, UVM_DEFAULT)
+        `uvm_field_int(flags, UVM_DEFAULT)
+        `uvm_field_int(seq_num, UVM_DEFAULT)
+        `uvm_field_int(opcode, UVM_DEFAULT)
+        `uvm_field_int(arg1, UVM_DEFAULT)
+        `uvm_field_int(arg2, UVM_DEFAULT)
+        `uvm_field_int(payload_len, UVM_DEFAULT)
+        `uvm_field_int(payload_size, UVM_DEFAULT)
+        `uvm_field_int(credit, UVM_DEFAULT)
+        `uvm_field_int(nack_seq, UVM_DEFAULT)
+        `uvm_field_int(nack_count, UVM_DEFAULT)
+        `uvm_field_int(tuser_err, UVM_DEFAULT)
+    `uvm_object_utils_end
+
+    function new(string name = "ludp_txn");
+        super.new(name);
         frame_type = FRAME_UNKNOWN;
-        pkt_type = TYPE_CMD;
-        flags = 8'h00;
-        seq_num = 32'h0;
-        opcode = CMD_START;
-        arg1 = 32'h0;
-        arg2 = 16'h0;
+        stim_cmd   = CMD_IDLE;
+        pkt_type   = TYPE_CMD;
+        flags      = 8'h00;
+        seq_num    = 32'h0;
+        opcode     = CMD_START;
+        arg1       = 32'h0;
+        arg2       = 16'h0;
         payload_len = 0;
-        eth_dst = DUT_MAC;
-        eth_src = HOST_MAC;
-        tuser_err = 0;
+        eth_dst    = DUT_MAC;
+        eth_src    = HOST_MAC;
+        tuser_err  = 0;
+        payload_size = 64;
+        credit     = 1;
+        nack_seq   = 32'h0;
+        nack_count = 16'h1;
     endfunction
 
     function void set_cmd(input bit [15:0] op, input bit [31:0] a1,
                           input bit [15:0] a2, input bit [7:0] fl);
+        stim_cmd   = CMD_LUDP_CMD;
         frame_type = FRAME_LUDP_CMD;
         pkt_type   = TYPE_CMD;
         opcode     = op;
@@ -118,10 +165,11 @@ class ludp_txn;
         payload_len = 0;
     endfunction
 
-    function void set_credit(input bit [31:0] credit);
+    function void set_credit(input bit [31:0] cr);
+        stim_cmd   = CMD_LUDP_CREDIT;
         frame_type = FRAME_LUDP_CREDIT;
         pkt_type   = TYPE_CREDIT;
-        seq_num    = credit;
+        seq_num    = cr;
         opcode     = 16'h0;
         arg1       = 32'h0;
         arg2       = 16'h0;
@@ -130,6 +178,7 @@ class ludp_txn;
     endfunction
 
     function void set_nack(input bit [31:0] miss_seq, input bit [15:0] count);
+        stim_cmd   = CMD_LUDP_NACK;
         frame_type = FRAME_LUDP_NACK;
         pkt_type   = TYPE_NACK;
         seq_num    = miss_seq;
@@ -140,48 +189,19 @@ class ludp_txn;
         payload_len = 0;
     endfunction
 
-    function void set_arp_request();
-        frame_type = FRAME_ARP_REQUEST;
-        eth_dst = 48'hFFFFFFFFFFFF;
-        eth_src = HOST_MAC;
+    function void set_start(input bit [15:0] psize);
+        stim_cmd     = CMD_LUDP_START;
+        payload_size = psize;
     endfunction
 
-    function void set_arp_reply();
-        frame_type = FRAME_ARP_REPLY;
-        eth_dst = DUT_MAC;
-        eth_src = HOST_MAC;
+    function void set_stop();
+        stim_cmd = CMD_LUDP_STOP;
     endfunction
 
-    function void set_icmp_request(input bit [15:0] id, input bit [15:0] seq,
-                                   input int plen);
-        frame_type = FRAME_ICMP_REQUEST;
-        icmp_id  = id;
-        icmp_seq = seq;
-        payload_len = plen;
-        eth_dst = DUT_MAC;
-        eth_src = HOST_MAC;
-    endfunction
-
-    function string to_string();
-        string s;
-        case (frame_type)
-            FRAME_ARP_REQUEST:  s = "ARP_REQUEST";
-            FRAME_ARP_REPLY:    s = "ARP_REPLY";
-            FRAME_LUDP_CMD:     s = $sformatf("CMD(type=%02h,op=%04h,arg1=%08h,arg2=%04h,fl=%02h)", pkt_type, opcode, arg1, arg2, flags);
-            FRAME_LUDP_CREDIT:  s = $sformatf("CREDIT(credit=%08h)", seq_num);
-            FRAME_LUDP_NACK:    s = $sformatf("NACK(miss=%08h,count=%04h)", seq_num, opcode);
-            FRAME_LUDP_DATA:    s = $sformatf("DATA(seq=%08h,paylen=%0d)", seq_num, payload_len);
-            FRAME_LUDP_ACK:     s = $sformatf("ACK(seq=%08h)", seq_num);
-            FRAME_LUDP_CPL:     s = $sformatf("CPL(seq=%08h)", seq_num);
-            FRAME_ICMP_REQUEST: s = $sformatf("ICMP_REQ(id=%04h,seq=%04h)", icmp_id, icmp_seq);
-            FRAME_ICMP_REPLY:   s = $sformatf("ICMP_REPLY(id=%04h,seq=%04h)", icmp_id, icmp_seq);
-            default:            s = "UNKNOWN";
-        endcase
-        return s;
-    endfunction
 endclass
 
-class ludp_rx_frame;
+class ludp_rx_frame extends uvm_sequence_item;
+
     bit [63:0] raw_data [0:2047];
     bit [7:0]  raw_ctrl [0:2047];
     int        raw_len;
@@ -221,7 +241,17 @@ class ludp_rx_frame;
 
     frame_type_e frame_type;
 
-    function new();
+    `uvm_object_utils_begin(ludp_rx_frame)
+        `uvm_field_enum(frame_type_e, frame_type, UVM_DEFAULT)
+        `uvm_field_int(eth_type, UVM_DEFAULT)
+        `uvm_field_int(ludp_type, UVM_DEFAULT)
+        `uvm_field_int(ludp_seq, UVM_DEFAULT)
+        `uvm_field_int(ludp_opcode, UVM_DEFAULT)
+        `uvm_field_int(ludp_pay_len, UVM_DEFAULT)
+    `uvm_object_utils_end
+
+    function new(string name = "ludp_rx_frame");
+        super.new(name);
         raw_len = 0;
         frame_type = FRAME_UNKNOWN;
     endfunction
@@ -241,7 +271,6 @@ class ludp_rx_frame;
 
     function void parse();
         if (raw_len < 3) begin
-            $display("[PARSE] raw_len=%0d too short", raw_len);
             return;
         end
 
@@ -250,9 +279,6 @@ class ludp_rx_frame;
         eth_src  = {get_byte(6), get_byte(7), get_byte(8),
                     get_byte(9), get_byte(10), get_byte(11)};
         eth_type = {get_byte(12), get_byte(13)};
-
-        $display("[PARSE] raw_len=%0d eth_dst=%012h eth_src=%012h eth_type=%04h",
-                 raw_len, eth_dst, eth_src, eth_type);
 
         if (eth_type == 16'h0806) begin
             arp_opcode = {get_byte(20), get_byte(21)};
@@ -340,9 +366,9 @@ class ludp_rx_frame;
             payload_beat[15:8]  = get_byte(byte_offset + 1);
             payload_beat[7:0]   = get_byte(byte_offset);
 
-            rx_marker  = payload_beat[31:0];
+            rx_marker   = payload_beat[31:0];
             rx_beat_idx = payload_beat[47:32];
-            rx_pkt_idx = payload_beat[63:48];
+            rx_pkt_idx  = payload_beat[63:48];
 
             if (rx_marker !== 32'hA5A5A5A5 ||
                 rx_pkt_idx !== ludp_seq[15:0] ||
@@ -353,22 +379,22 @@ class ludp_rx_frame;
         return (err_count == 0);
     endfunction
 
-    function string to_string();
-        string s;
-        s = $sformatf("type=%s eth_dst=%012h eth_src=%012h eth_type=%04h",
-                       frame_type.name, eth_dst, eth_src, eth_type);
-        if (eth_type == 16'h0800) begin
-            s = {s, $sformatf(" ip_src=%08h ip_dst=%08h proto=%02h", ip_src, ip_dst, ip_proto)};
-            if (ip_proto == 8'h11)
-                s = {s, $sformatf(" ludp:type=%02h flags=%02h seq=%08h op=%04h arg1=%08h arg2=%04h paylen=%0d",
-                    ludp_type, ludp_flags, ludp_seq, ludp_opcode, ludp_arg1, ludp_arg2, ludp_pay_len)};
-            if (ip_proto == 8'h01)
-                s = {s, $sformatf(" icmp:type=%02h code=%02h id=%04h seq=%04h", icmp_type, icmp_code, icmp_id, icmp_seq)};
-        end
-        if (eth_type == 16'h0806)
-            s = {s, $sformatf(" arp_op=%04h", arp_opcode)};
-        return s;
+endclass
+
+class ludp_env_config extends uvm_object;
+
+    virtual xgmii_if    vif;
+    virtual dut_ctrl_if ctrl_vif;
+    bit                 has_scoreboard = 1;
+    bit                 has_coverage   = 1;
+    bit                 is_active      = UVM_ACTIVE;
+
+    `uvm_object_utils(ludp_env_config)
+
+    function new(string name = "ludp_env_config");
+        super.new(name);
     endfunction
+
 endclass
 
 function [31:0] eth_crc32(input bit [7:0] data[], input int len);
@@ -425,27 +451,15 @@ function [15:0] icmp_checksum_calc(input bit [7:0] data[], input int start_off, 
     end
 endfunction
 
-function [15:0] random_payload_size(input bit [31:0] seed);
-    bit [15:0] sizes [0:6];
-    begin
-        sizes[0] = 16;
-        sizes[1] = 32;
-        sizes[2] = 64;
-        sizes[3] = 256;
-        sizes[4] = 512;
-        sizes[5] = 1024;
-        sizes[6] = 8960;
-        random_payload_size = sizes[seed % 7];
-    end
-endfunction
-
-function [31:0] random_credit(input bit [31:0] seed);
-    begin
-        case (seed % 2)
-            0: random_credit = 1;
-            1: random_credit = 2;
-        endcase
-    end
-endfunction
+`include "ludp_tb/ludp_sequencer.sv"
+`include "ludp_tb/ludp_driver.sv"
+`include "ludp_tb/ludp_monitor.sv"
+`include "ludp_tb/ludp_agent.sv"
+`include "ludp_tb/ludp_scoreboard.sv"
+`include "ludp_tb/ludp_coverage.sv"
+`include "ludp_tb/ludp_env.sv"
+`include "ludp_tb/ludp_virtual_sequencer.sv"
+`include "ludp_tb/ludp_virtual_sequences.sv"
+`include "ludp_tb/ludp_test_lib.sv"
 
 endpackage

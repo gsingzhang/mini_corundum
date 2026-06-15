@@ -1,93 +1,55 @@
-`timescale 1ns / 1ps
+class ludp_env extends uvm_env;
 
-import ludp_tb_pkg::*;
-
-class ludp_env;
-
-    ludp_driver    driver;
-    ludp_monitor   monitor;
-    ludp_sequencer sequencer;
+    ludp_agent     agent;
     ludp_scoreboard scoreboard;
     ludp_coverage  coverage;
 
-    virtual xgmii_if    vif;
-    virtual dut_ctrl_if ctrl_vif;
+    ludp_env_config cfg;
 
-    bit rst;
-    bit sfp0_tx_rst;
-    bit sfp0_rx_rst;
-    bit sfp1_tx_rst;
-    bit sfp1_rx_rst;
+    `uvm_component_utils(ludp_env)
 
-    function new();
-        driver    = new();
-        monitor   = new();
-        sequencer = new();
-        scoreboard = new();
-        coverage  = new();
+    function new(string name = "ludp_env", uvm_component parent = null);
+        super.new(name, parent);
     endfunction
 
-    function void build();
-        driver.vif      = vif;
-        driver.ctrl_vif = ctrl_vif;
-        monitor.vif     = vif;
-    endfunction
+    virtual function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
 
-    task reset_dut();
-        driver.reset_dut(rst, sfp0_tx_rst, sfp0_rx_rst, sfp1_tx_rst, sfp1_rx_rst);
-    endtask
-
-    task start_monitor();
-        fork
-            monitor.run();
-        join_none
-    endtask
-
-    task start_session(input bit [15:0] payload_size);
-        coverage.sample_payload_size(payload_size);
-        coverage.sample_cmd_start();
-        driver.start_ludp_session(payload_size);
-    endtask
-
-    task stop_session();
-        coverage.sample_cmd_stop();
-        driver.stop_ludp_session();
-    endtask
-
-    task send_credit_and_wait(input bit [31:0] credit, input int num_frames);
-        driver.send_ludp_credit(credit);
-        coverage.sample_credit_valid();
-        monitor.wait_for_tx_frames(num_frames, 5000);
-    endtask
-
-    task verify_n_data_frames_with_prbs(input int num_frames, output int total_errors);
-        ludp_rx_frame frm;
-        int fi;
-        int prbs_err;
-        begin
-            total_errors = 0;
-            monitor.reset_capture();
-            monitor.wait_for_tx_frames(num_frames, 500000);
-
-            if (monitor.tx_frame_count < num_frames) begin
-                $display("[%0t] ENV: ERROR Only %0d/%0d frames received", $time, monitor.tx_frame_count, num_frames);
-                total_errors = num_frames - monitor.tx_frame_count;
-            end
-
-            for (fi = 0; fi < num_frames; fi++) begin
-                coverage.sample_data_sent();
-            end
-            coverage.sample_prbs_ok(num_frames);
+        if (!uvm_config_db#(ludp_env_config)::get(this, "", "cfg", cfg)) begin
+            cfg = ludp_env_config::type_id::create("cfg");
+            if (!uvm_config_db#(virtual xgmii_if)::get(this, "", "vif", cfg.vif))
+                `uvm_fatal("ENV", "Failed to get xgmii_if via config_db")
+            if (!uvm_config_db#(virtual dut_ctrl_if)::get(this, "", "ctrl_vif", cfg.ctrl_vif))
+                `uvm_fatal("ENV", "Failed to get dut_ctrl_if via config_db")
         end
-    endtask
 
-    function int get_error_count();
-        return scoreboard.error_count;
+        uvm_config_db#(virtual xgmii_if)::set(this, "agent", "vif", cfg.vif);
+        uvm_config_db#(virtual dut_ctrl_if)::set(this, "agent", "ctrl_vif", cfg.ctrl_vif);
+
+        if (cfg.is_active)
+            uvm_config_db#(uvm_active_passive_enum)::set(this, "agent", "is_active", UVM_ACTIVE);
+        else
+            uvm_config_db#(uvm_active_passive_enum)::set(this, "agent", "is_active", UVM_PASSIVE);
+
+        agent = ludp_agent::type_id::create("agent", this);
+
+        if (cfg.has_scoreboard)
+            scoreboard = ludp_scoreboard::type_id::create("scoreboard", this);
+
+        if (cfg.has_coverage) begin
+            uvm_config_db#(virtual dut_ctrl_if)::set(this, "coverage", "ctrl_vif", cfg.ctrl_vif);
+            coverage = ludp_coverage::type_id::create("coverage", this);
+        end
     endfunction
 
-    task report();
-        scoreboard.report();
-        coverage.report();
-    endtask
+    virtual function void connect_phase(uvm_phase phase);
+        super.connect_phase(phase);
+        if (scoreboard != null)
+            agent.ap.connect(scoreboard.ap);
+        if (coverage != null) begin
+            agent.ap.connect(coverage.rx_ap);
+            agent.tx_ap.connect(coverage.tx_ap);
+        end
+    endfunction
 
 endclass

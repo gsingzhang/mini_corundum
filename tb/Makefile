@@ -1,8 +1,8 @@
-# VCS Makefile for fpga_core testbench (UVM-like layered architecture)
+# VCS Makefile for fpga_core testbench (UVM architecture)
 #
 # Usage:
 #   make sim        - Run all tests (batch simulation)
-#   make sim TEST=1 - Run specific test (1-7 or name)
+#   make sim TEST=1 - Run specific test by UVM_TESTNAME
 #   make sim-vcd    - Run with VCD waveform
 #   make clean      - Remove build artifacts
 
@@ -66,55 +66,47 @@ VERILOG_SOURCES += $(LIB_AXIS_DIR)/axis_async_fifo.v
 VERILOG_SOURCES += $(LIB_AXIS_DIR)/axis_async_fifo_adapter.v
 VERILOG_SOURCES += $(LIB_AXIS_DIR)/sync_reset.v
 
-# UVM-like testbench components (order matters for package compilation)
 VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_tb_pkg.sv
 VERILOG_SOURCES += $(TB_LUDP_DIR)/xgmii_if.sv
 VERILOG_SOURCES += $(TB_LUDP_DIR)/dut_ctrl_if.sv
-VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_driver.sv
-VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_monitor.sv
-VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_sequencer.sv
-VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_scoreboard.sv
-VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_coverage.sv
-VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_env.sv
-VERILOG_SOURCES += $(TB_LUDP_DIR)/ludp_test_lib.sv
 
-# Top-level testbench
 VERILOG_SOURCES += $(TB_DIR)/tb_fpga_core.sv
 
 VCS = vcs
 VCS_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
-    -debug_access+all -kdb \
+    -debug_access+r -kdb \
     +v2k \
     +v2k_generate \
     +libext+.v+.sv \
     -ignore initializer_driver_checks \
+    -ntb_opts uvm-1.2 \
     -CFLAGS "-DVCS" \
     -f filelist.f \
     -top $(TB_TOP) \
-    -o simv
+    -o simv \
+    -no_stack_annotator
 
 SIMV = ./simv
 
-TEST_ARGS =
+UVM_TEST = test_all
 
 .PHONY: all compile compile-vcd sim sim-vcd clean distclean help
 
 all: sim
 
 help:
-	@echo "VCS Makefile for fpga_core testbench (UVM-like architecture)"
+	@echo "VCS Makefile for fpga_core testbench (UVM architecture)"
 	@echo ""
 	@echo "Targets:"
-	@echo "  make sim        - Run all tests"
-	@echo "  make sim TEST=1 - Run test 1 (protocol_basics)"
-	@echo "  make sim TEST=2 - Run test 2 (cmd_lifecycle)"
-	@echo "  make sim TEST=3 - Run test 3 (credit_flow)"
-	@echo "  make sim TEST=4 - Run test 4 (data_integrity)"
-	@echo "  make sim TEST=5 - Run test 5 (retransmission)"
-	@echo "  make sim TEST=6 - Run test 6 (error_resilience)"
-	@echo "  make sim TEST=7 - Run test 7 (internal_mechanisms)"
-	@echo "  make sim-vcd    - Run with VCD waveform"
-	@echo "  make clean      - Remove build artifacts"
+	@echo "  make sim              - Run test_protocol_basics"
+	@echo "  make sim TEST=cmd     - Run test_cmd_lifecycle"
+	@echo "  make sim TEST=credit  - Run test_credit_flow"
+	@echo "  make sim TEST=data    - Run test_data_integrity"
+	@echo "  make sim TEST=retx    - Run test_retransmission"
+	@echo "  make sim TEST=error   - Run test_error_resilience"
+	@echo "  make sim TEST=mech    - Run test_internal_mechanisms"
+	@echo "  make sim-vcd          - Run with VCD waveform"
+	@echo "  make clean            - Remove build artifacts"
 
 filelist.f: Makefile
 	@echo "Generating filelist..."
@@ -128,17 +120,17 @@ compile-vcd: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+VCD_DUMP
 
 sim: compile
-	$(SIMV) -no_save $(TEST_ARGS)
+	setarch x86_64 -R $(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW -suppress=ASLR_DETECTED_INFO
 
 sim-test: compile
-	$(SIMV) -no_save +TEST=$(TEST)
+	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW
 
 sim-vcd: compile-vcd
 	@echo ""
 	@echo "========================================"
 	@echo "Running with VCD waveform..."
 	@echo "========================================"
-	$(SIMV) -no_save -l sim-vcd.log $(TEST_ARGS)
+	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW -l sim-vcd.log
 	@echo ""
 	@echo "========================================"
 	@if [ -f $(TB_TOP).vcd ]; then \
@@ -151,11 +143,11 @@ sim-vcd: compile-vcd
 
 sim-dve: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+VPD_DUMP
-	$(SIMV) -no_save -l sim-dve.log $(TEST_ARGS)
+	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW -l sim-dve.log
 
 sim-verdi: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+FSDB_DUMP
-	$(SIMV) -no_save -l sim-verdi.log $(TEST_ARGS)
+	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST) +UVM_VERBOSITY=UVM_LOW -l sim-verdi.log
 
 clean:
 	rm -rf simv simv.daidir csrc

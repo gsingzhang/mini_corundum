@@ -15,10 +15,17 @@ interface dut_ctrl_if(input bit clk);
     bit        force_status_en;
     bit        force_status_release;
 
+    bit        rst;
+    bit        sfp0_tx_rst;
+    bit        sfp0_rx_rst;
+    bit        sfp1_tx_rst;
+    bit        sfp1_rx_rst;
+
     clocking cb @(posedge clk);
         output payload_size, payload_size_we;
         output force_status_opcode, force_status_data, force_status_valid;
         output force_status_en, force_status_release;
+        output rst, sfp0_tx_rst, sfp0_rx_rst, sfp1_tx_rst, sfp1_rx_rst;
         input tx_seq_num, tx_enabled, dma_wr_enable;
     endclocking
 

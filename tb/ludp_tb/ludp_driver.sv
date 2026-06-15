@@ -1,16 +1,101 @@
-`timescale 1ns / 1ps
+class ludp_driver extends uvm_driver #(ludp_txn);
 
-import ludp_tb_pkg::*;
-
-class ludp_driver;
-
-    virtual xgmii_if vif;
+    virtual xgmii_if    vif;
     virtual dut_ctrl_if ctrl_vif;
+
+    uvm_analysis_port #(ludp_txn) ap;
 
     bit [7:0] frame_data [0:1519];
 
-    function new();
+    `uvm_component_utils(ludp_driver)
+
+    function new(string name = "ludp_driver", uvm_component parent = null);
+        super.new(name, parent);
     endfunction
+
+    virtual function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+        ap = new("ap", this);
+        if (!uvm_config_db#(virtual xgmii_if)::get(this, "", "vif", vif))
+            `uvm_fatal("DRV", "Failed to get xgmii_if via config_db")
+        if (!uvm_config_db#(virtual dut_ctrl_if)::get(this, "", "ctrl_vif", ctrl_vif))
+            `uvm_fatal("DRV", "Failed to get dut_ctrl_if via config_db")
+    endfunction
+
+    virtual task run_phase(uvm_phase phase);
+        fork
+            drive_loop();
+        join
+    endtask
+
+    task drive_loop();
+        ludp_txn txn;
+        forever begin
+            seq_item_port.get_next_item(txn);
+            drive_txn(txn);
+            ap.write(txn);
+            seq_item_port.item_done();
+        end
+    endtask
+
+    task drive_txn(ludp_txn txn);
+        `uvm_info("DRV", $sformatf("Driving txn: stim_cmd=%0s", txn.stim_cmd.name()), UVM_HIGH)
+        case (txn.stim_cmd)
+            CMD_LUDP_START:  drive_start(txn);
+            CMD_LUDP_STOP:   drive_stop(txn);
+            CMD_LUDP_CMD:    drive_ludp_cmd(txn);
+            CMD_LUDP_CREDIT: drive_ludp_credit(txn);
+            CMD_LUDP_NACK:   drive_ludp_nack(txn);
+            CMD_ARP_REQUEST: send_arp_request();
+            CMD_ARP_REPLY:   send_arp_reply();
+            CMD_ICMP_REQUEST: drive_icmp_request(txn);
+            CMD_RESET:       reset_dut();
+            CMD_IDLE:        drive_idle();
+            default:         drive_idle();
+        endcase
+    endtask
+
+    task drive_start(ludp_txn txn);
+        `uvm_info("DRV", $sformatf("CMD_START payload_size=%0d", txn.payload_size), UVM_HIGH)
+        ctrl_vif.set_payload_size(txn.payload_size);
+        @(posedge vif.clk);
+        send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
+        repeat(2000) @(posedge vif.clk);
+    endtask
+
+    task drive_stop(ludp_txn txn);
+        `uvm_info("DRV", "CMD_STOP", UVM_HIGH)
+        send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
+        repeat(500) @(posedge vif.clk);
+    endtask
+
+    task drive_ludp_cmd(ludp_txn txn);
+        `uvm_info("DRV", $sformatf("CMD opcode=%04h arg1=%08h arg2=%04h flags=%02h",
+                 txn.opcode, txn.arg1, txn.arg2, txn.flags), UVM_HIGH)
+        if (txn.tuser_err)
+            send_ludp_packet_with_tuser_err(txn.pkt_type, txn.flags, txn.seq_num,
+                txn.opcode, txn.arg1, txn.arg2, txn.payload_len);
+        else
+            send_ludp_packet(txn.pkt_type, txn.flags, txn.seq_num,
+                txn.opcode, txn.arg1, txn.arg2, txn.payload_len);
+    endtask
+
+    task drive_ludp_credit(ludp_txn txn);
+        `uvm_info("DRV", $sformatf("CREDIT credit=%08h", txn.seq_num), UVM_HIGH)
+        send_ludp_packet(TYPE_CREDIT, 8'h00, txn.seq_num, 16'h0, 32'h0, 16'h0, 0);
+    endtask
+
+    task drive_ludp_nack(ludp_txn txn);
+        `uvm_info("DRV", $sformatf("NACK miss_seq=%08h count=%04h", txn.seq_num, txn.opcode), UVM_HIGH)
+        send_ludp_packet(TYPE_NACK, 8'h00, txn.seq_num, txn.opcode, 32'h0, 16'h0, 0);
+    endtask
+
+    task drive_idle();
+        @(posedge vif.clk);
+        #0.1;
+        vif.rxd <= XGMII_IDLE_QW;
+        vif.rxc <= XGMII_IDLE_CTRL;
+    endtask
 
     task send_xgmii_frame(input int len);
         int i;
@@ -145,7 +230,6 @@ class ludp_driver;
     task send_arp_request();
         int i;
         begin
-            $display("[%0t] DRV: Sending ARP request...", $time);
             frame_data[0]  = 8'hFF; frame_data[1]  = 8'hFF; frame_data[2]  = 8'hFF;
             frame_data[3]  = 8'hFF; frame_data[4]  = 8'hFF; frame_data[5]  = 8'hFF;
             frame_data[6]  = HOST_MAC[47:40]; frame_data[7]  = HOST_MAC[39:32];
@@ -173,7 +257,6 @@ class ludp_driver;
     task send_arp_reply();
         int i;
         begin
-            $display("[%0t] DRV: Sending ARP reply...", $time);
             frame_data[0]  = DUT_MAC[47:40]; frame_data[1]  = DUT_MAC[39:32];
             frame_data[2]  = DUT_MAC[31:24]; frame_data[3]  = DUT_MAC[23:16];
             frame_data[4]  = DUT_MAC[15:8];  frame_data[5]  = DUT_MAC[7:0];
@@ -270,6 +353,13 @@ class ludp_driver;
         end
     endtask
 
+    task send_ludp_cmd(input bit [15:0] opcode, input bit [31:0] arg1,
+                       input bit [15:0] arg2, input bit [7:0] flags);
+        begin
+            send_ludp_packet(TYPE_CMD, flags, 32'h0, opcode, arg1, arg2, 0);
+        end
+    endtask
+
     task send_ludp_packet_with_tuser_err(input bit [7:0] pkt_type, input bit [7:0] flags,
                                          input bit [31:0] seq_num, input bit [15:0] opcode,
                                          input bit [31:0] arg1, input bit [15:0] arg2,
@@ -282,38 +372,14 @@ class ludp_driver;
         end
     endtask
 
-    task send_ludp_cmd(input bit [15:0] opcode, input bit [31:0] arg1,
-                       input bit [15:0] arg2, input bit [7:0] flags);
-        begin
-            $display("[%0t] DRV: Sending LUDP CMD: opcode=%04h arg1=%08h arg2=%04h flags=%02h",
-                     $time, opcode, arg1, arg2, flags);
-            send_ludp_packet(TYPE_CMD, flags, 32'h0, opcode, arg1, arg2, 0);
-        end
-    endtask
-
-    task send_ludp_credit(input bit [31:0] credit);
-        begin
-            $display("[%0t] DRV: Sending LUDP CREDIT: credit=%08h", $time, credit);
-            send_ludp_packet(TYPE_CREDIT, 8'h00, credit, 16'h0, 32'h0, 16'h0, 0);
-        end
-    endtask
-
-    task send_ludp_nack(input bit [31:0] miss_seq, input bit [15:0] count);
-        begin
-            $display("[%0t] DRV: Sending LUDP NACK: miss_seq=%08h count=%04h", $time, miss_seq, count);
-            send_ludp_packet(TYPE_NACK, 8'h00, miss_seq, count, 32'h0, 16'h0, 0);
-        end
-    endtask
-
-    task send_icmp_echo_request(input bit [15:0] icmp_id, input bit [15:0] icmp_seq,
-                                input int payload_len);
+    task drive_icmp_request(ludp_txn txn);
         int i;
         int total_len;
         bit [159:0] ip_hdr;
         bit [15:0] cksum;
         bit [15:0] icmp_cksum;
         begin
-            total_len = 20 + 8 + payload_len;
+            total_len = 20 + 8 + txn.payload_len;
 
             frame_data[0]  = DUT_MAC[47:40];  frame_data[1]  = DUT_MAC[39:32];
             frame_data[2]  = DUT_MAC[31:24];  frame_data[3]  = DUT_MAC[23:16];
@@ -342,41 +408,35 @@ class ludp_driver;
             frame_data[34] = 8'h08;
             frame_data[35] = 8'h00;
             frame_data[36] = 8'h00; frame_data[37] = 8'h00;
-            frame_data[38] = icmp_id[15:8];  frame_data[39] = icmp_id[7:0];
-            frame_data[40] = icmp_seq[15:8]; frame_data[41] = icmp_seq[7:0];
+            frame_data[38] = txn.icmp_id[15:8];  frame_data[39] = txn.icmp_id[7:0];
+            frame_data[40] = txn.icmp_seq[15:8]; frame_data[41] = txn.icmp_seq[7:0];
 
-            for (i = 0; i < payload_len; i++)
+            for (i = 0; i < txn.payload_len; i++)
                 frame_data[42 + i] = 8'hA5 + i[7:0];
 
-            icmp_cksum = icmp_checksum_calc(frame_data, 34, 42 + payload_len);
+            icmp_cksum = icmp_checksum_calc(frame_data, 34, 42 + txn.payload_len);
             frame_data[36] = icmp_cksum[15:8];
             frame_data[37] = icmp_cksum[7:0];
 
-            $display("[%0t] DRV: Sending ICMP Echo Request: id=%04h seq=%04h payload=%0d bytes",
-                     $time, icmp_id, icmp_seq, payload_len);
-            send_xgmii_frame(34 + 8 + payload_len);
+            send_xgmii_frame(34 + 8 + txn.payload_len);
         end
     endtask
 
-    task set_payload_size(input bit [15:0] size_bytes);
+    task reset_dut();
         begin
-            $display("[%0t] DRV: Setting test payload size to %0d bytes", $time, size_bytes);
-            ctrl_vif.set_payload_size(size_bytes);
-        end
-    endtask
-
-    task reset_dut(ref bit rst, ref bit sfp0_tx_rst, ref bit sfp0_rx_rst,
-                   ref bit sfp1_tx_rst, ref bit sfp1_rx_rst);
-        begin
-            $display("[%0t] DRV: Resetting DUT...", $time);
-            rst = 1;
-            sfp0_tx_rst = 1; sfp0_rx_rst = 1;
-            sfp1_tx_rst = 1; sfp1_rx_rst = 1;
+            `uvm_info("DRV", "Resetting DUT...", UVM_HIGH)
+            ctrl_vif.rst = 1'b1;
+            ctrl_vif.sfp0_tx_rst = 1'b1;
+            ctrl_vif.sfp0_rx_rst = 1'b1;
+            ctrl_vif.sfp1_tx_rst = 1'b1;
+            ctrl_vif.sfp1_rx_rst = 1'b1;
             repeat(20) @(posedge vif.clk);
-            rst = 0;
-            sfp0_tx_rst = 0; sfp0_rx_rst = 0;
-            sfp1_tx_rst = 0; sfp1_rx_rst = 0;
-            $display("[%0t] DRV: Reset released", $time);
+            ctrl_vif.rst = 1'b0;
+            ctrl_vif.sfp0_tx_rst = 1'b0;
+            ctrl_vif.sfp0_rx_rst = 1'b0;
+            ctrl_vif.sfp1_tx_rst = 1'b0;
+            ctrl_vif.sfp1_rx_rst = 1'b0;
+            `uvm_info("DRV", "Reset released", UVM_HIGH)
             repeat(600) @(posedge vif.clk);
             resolve_arp();
         end
@@ -389,31 +449,6 @@ class ludp_driver;
             repeat(500) @(posedge vif.clk);
             send_arp_reply();
             repeat(1000) @(posedge vif.clk);
-        end
-    endtask
-
-    task start_ludp_session(input bit [15:0] payload_size);
-        begin
-            set_payload_size(payload_size);
-            @(posedge vif.clk);
-            send_ludp_cmd(CMD_START, 32'h0, 16'h0, 8'h00);
-            repeat(1000) @(posedge vif.clk);
-        end
-    endtask
-
-    task stop_ludp_session();
-        begin
-            send_ludp_cmd(CMD_STOP, 32'h0, 16'h0, 8'h00);
-            repeat(500) @(posedge vif.clk);
-        end
-    endtask
-
-    task send_idle();
-        begin
-            @(posedge vif.clk);
-            #0.1;
-            vif.rxd <= XGMII_IDLE_QW;
-            vif.rxc <= XGMII_IDLE_CTRL;
         end
     endtask
 

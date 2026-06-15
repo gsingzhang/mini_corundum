@@ -1,38 +1,123 @@
-`timescale 1ns / 1ps
+class ludp_sequencer extends uvm_sequencer #(ludp_txn);
+    `uvm_component_utils(ludp_sequencer)
 
-import ludp_tb_pkg::*;
+    function new(string name = "ludp_sequencer", uvm_component parent = null);
+        super.new(name, parent);
+    endfunction
+endclass
 
-class ludp_sequencer;
+class ludp_base_seq extends uvm_sequence #(ludp_txn);
+    `uvm_object_utils(ludp_base_seq)
 
-    bit [31:0] rand_seed;
-
-    function new();
-        rand_seed = 32'h12345678;
+    function new(string name = "ludp_base_seq");
+        super.new(name);
     endfunction
 
-    function void set_seed(input bit [31:0] seed);
-        rand_seed = seed;
-    endfunction
+    virtual task body();
+    endtask
 
-    function bit [15:0] next_payload_size();
-        bit [15:0] result;
-        result = random_payload_size(rand_seed);
-        rand_seed = rand_seed * 32'h01010101 + 1;
-        return result;
-    endfunction
+    task send_start(input bit [15:0] payload_size);
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.set_start(payload_size);
+        finish_item(txn);
+    endtask
 
-    function bit [31:0] next_credit();
-        bit [31:0] result;
-        result = random_credit(rand_seed);
-        rand_seed = rand_seed * 32'h01010101 + 1;
-        return result;
-    endfunction
+    task send_stop();
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.set_stop();
+        finish_item(txn);
+    endtask
 
-    function bit [31:0] next_rand();
-        bit [31:0] result;
-        result = rand_seed;
-        rand_seed = rand_seed * 32'h01010101 + 1;
-        return result;
-    endfunction
+    task send_credit(input bit [31:0] credit_val);
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.set_credit(credit_val);
+        finish_item(txn);
+    endtask
+
+    task send_nack(input bit [31:0] miss_seq, input bit [15:0] miss_count);
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.set_nack(miss_seq, miss_count);
+        finish_item(txn);
+    endtask
+
+    task send_cmd(input bit [15:0] opcode, input bit [31:0] arg1,
+                  input bit [15:0] arg2, input bit [7:0] flags);
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.set_cmd(opcode, arg1, arg2, flags);
+        finish_item(txn);
+    endtask
+
+    task send_arp_request();
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.stim_cmd = CMD_ARP_REQUEST;
+        finish_item(txn);
+    endtask
+
+    task send_arp_reply();
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.stim_cmd = CMD_ARP_REPLY;
+        finish_item(txn);
+    endtask
+
+    task send_icmp_request(input bit [15:0] id = 16'h1234, input bit [15:0] seq = 16'h0001,
+                           input int plen = 56);
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.stim_cmd = CMD_ICMP_REQUEST;
+        txn.icmp_id = id;
+        txn.icmp_seq = seq;
+        txn.payload_len = plen;
+        finish_item(txn);
+    endtask
+
+    task send_idle();
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.stim_cmd = CMD_IDLE;
+        finish_item(txn);
+    endtask
+
+    task send_reset();
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.stim_cmd = CMD_RESET;
+        finish_item(txn);
+    endtask
+
+    task send_ludp_raw(input bit [7:0] pkt_type, input bit [7:0] flags,
+                       input bit [31:0] seq_num, input bit [15:0] opcode,
+                       input bit [31:0] arg1, input bit [15:0] arg2,
+                       input int payload_len, input bit tuser_err = 0);
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.stim_cmd = CMD_LUDP_CMD;
+        txn.pkt_type = pkt_type;
+        txn.flags    = flags;
+        txn.seq_num  = seq_num;
+        txn.opcode   = opcode;
+        txn.arg1     = arg1;
+        txn.arg2     = arg2;
+        txn.payload_len = payload_len;
+        txn.tuser_err = tuser_err;
+        finish_item(txn);
+    endtask
 
 endclass

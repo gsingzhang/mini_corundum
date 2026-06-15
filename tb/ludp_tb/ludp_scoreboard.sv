@@ -1,246 +1,96 @@
-`timescale 1ns / 1ps
+class ludp_scoreboard extends uvm_scoreboard;
 
-import ludp_tb_pkg::*;
-
-class ludp_scoreboard;
+    uvm_analysis_imp #(ludp_rx_frame, ludp_scoreboard) ap;
 
     int error_count;
     int check_count;
     int prbs_ok_count;
     int prbs_err_count;
 
-    mailbox frame_mbx;
+    int arp_reply_count;
+    int cmd_ack_count;
+    int cmd_cpl_count;
+    int data_frame_count;
+    int icmp_reply_count;
 
-    function new();
+    `uvm_component_utils(ludp_scoreboard)
+
+    function new(string name = "ludp_scoreboard", uvm_component parent = null);
+        super.new(name, parent);
         error_count   = 0;
         check_count   = 0;
         prbs_ok_count = 0;
         prbs_err_count = 0;
-        frame_mbx = new();
+        arp_reply_count = 0;
+        cmd_ack_count = 0;
+        cmd_cpl_count = 0;
+        data_frame_count = 0;
+        icmp_reply_count = 0;
     endfunction
 
-    function void reset();
-        error_count   = 0;
-        check_count   = 0;
-        prbs_ok_count = 0;
-        prbs_err_count = 0;
+    virtual function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+        ap = new("ap", this);
     endfunction
 
-    task check_ludp_response(input bit [7:0] exp_type, input bit [15:0] exp_opcode,
-                             ref ludp_rx_frame frm);
-        begin
-            if (frm == null) begin
-                $display("[%0t] SB: ERROR - No frame for response check", $time);
-                error_count = error_count + 1;
-                return;
+    virtual function void write(ludp_rx_frame frm);
+        int prbs_err;
+        check_count = check_count + 1;
+
+        case (frm.frame_type)
+            FRAME_ARP_REPLY: begin
+                arp_reply_count = arp_reply_count + 1;
+                `uvm_info("SB", $sformatf("ARP reply received"), UVM_HIGH)
             end
+            FRAME_ICMP_REPLY: begin
+                icmp_reply_count = icmp_reply_count + 1;
+                `uvm_info("SB", $sformatf("ICMP reply received"), UVM_HIGH)
+            end
+            FRAME_LUDP_ACK: begin
+                cmd_ack_count = cmd_ack_count + 1;
+                `uvm_info("SB", $sformatf("CMD_ACK received flags=%02h", frm.ludp_flags), UVM_HIGH)
+            end
+            FRAME_LUDP_CPL: begin
+                cmd_cpl_count = cmd_cpl_count + 1;
+                `uvm_info("SB", $sformatf("CMD_CPL received opcode=%04h", frm.ludp_opcode), UVM_HIGH)
+            end
+            FRAME_LUDP_DATA: begin
+                data_frame_count = data_frame_count + 1;
+                frm.verify_prbs(prbs_err);
+                if (prbs_err == 0) begin
+                    prbs_ok_count = prbs_ok_count + 1;
+                    `uvm_info("SB", $sformatf("DATA frame PRBS OK seq=%08h", frm.ludp_seq), UVM_HIGH)
+                end else begin
+                    prbs_err_count = prbs_err_count + 1;
+                    `uvm_error("SB", $sformatf("DATA frame PRBS ERR seq=%08h errors=%0d", frm.ludp_seq, prbs_err))
+                end
+            end
+            default: begin
+                `uvm_info("SB", $sformatf("Frame type=%0s", frm.frame_type.name()), UVM_HIGH)
+            end
+        endcase
 
-            check_count = check_count + 1;
-
-            if (frm.ludp_magic !== MAGIC) begin
-                $display("[%0t] SB: ERROR Magic mismatch: expected %04h, got %04h", $time, MAGIC, frm.ludp_magic);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS Magic correct", $time);
-
-            if (frm.ludp_type !== exp_type) begin
-                $display("[%0t] SB: ERROR Expected type %02h, got %02h", $time, exp_type, frm.ludp_type);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS Type correct", $time);
-
-            if (frm.ludp_opcode !== exp_opcode) begin
-                $display("[%0t] SB: ERROR Opcode expected %04h, got %04h", $time, exp_opcode, frm.ludp_opcode);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS Opcode correct", $time);
+        if (frm.ludp_magic !== MAGIC && frm.eth_type == 16'h0800 && frm.ip_proto == 8'h11) begin
+            `uvm_error("SB", $sformatf("Magic mismatch: expected %04h, got %04h", MAGIC, frm.ludp_magic))
+            error_count = error_count + 1;
         end
-    endtask
+    endfunction
 
-    task check_ludp_data(input bit [31:0] exp_seq, input bit [15:0] exp_pay_len,
-                         ref ludp_rx_frame frm);
-        bit [15:0] exp_udp_len;
-        begin
-            if (frm == null) begin
-                $display("[%0t] SB: ERROR - No frame for data check", $time);
-                error_count = error_count + 1;
-                return;
-            end
-
-            check_count = check_count + 1;
-
-            if (frm.ludp_magic !== MAGIC) begin
-                $display("[%0t] SB: ERROR Magic mismatch: expected %04h, got %04h", $time, MAGIC, frm.ludp_magic);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS Magic correct", $time);
-
-            if (frm.ludp_type !== TYPE_DATA) begin
-                $display("[%0t] SB: ERROR Expected DATA type %02h, got %02h", $time, TYPE_DATA, frm.ludp_type);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS DATA type correct", $time);
-
-            if (frm.ludp_seq !== exp_seq) begin
-                $display("[%0t] SB: ERROR DATA seq expected %08h, got %08h", $time, exp_seq, frm.ludp_seq);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS DATA seq correct (%08h)", $time, frm.ludp_seq);
-
-            if (exp_pay_len > 0) begin
-                exp_udp_len = 8 + 16 + exp_pay_len;
-                if (frm.udp_len !== exp_udp_len) begin
-                    $display("[%0t] SB: ERROR UDP length mismatch: expected %0d, got %0d",
-                             $time, exp_udp_len, frm.udp_len);
-                    error_count = error_count + 1;
-                end else
-                    $display("[%0t] SB: PASS UDP length correct (%0d)", $time, frm.udp_len);
-            end
-
-            if (frm.ip_dst !== HOST_IP) begin
-                $display("[%0t] SB: ERROR IP destination mismatch: expected %08h, got %08h",
-                         $time, HOST_IP, frm.ip_dst);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS IP destination correct (%08h)", $time, frm.ip_dst);
-        end
-    endtask
-
-    task check_arp_reply(ref ludp_rx_frame frm);
-        begin
-            if (frm == null) begin
-                $display("[%0t] SB: ERROR - No frame for ARP check", $time);
-                error_count = error_count + 1;
-                return;
-            end
-
-            check_count = check_count + 1;
-
-            if (frm.eth_dst !== HOST_MAC) begin
-                $display("[%0t] SB: ERROR ARP dst MAC mismatch: expected %012h, got %012h", $time, HOST_MAC, frm.eth_dst);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ARP dst MAC correct", $time);
-
-            if (frm.eth_src !== DUT_MAC) begin
-                $display("[%0t] SB: ERROR ARP src MAC mismatch: expected %012h, got %012h", $time, DUT_MAC, frm.eth_src);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ARP src MAC correct", $time);
-
-            if (frm.eth_type !== 16'h0806) begin
-                $display("[%0t] SB: ERROR ARP EtherType mismatch: expected 0806, got %04h", $time, frm.eth_type);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ARP EtherType correct", $time);
-
-            if (frm.arp_opcode !== 16'h0002) begin
-                $display("[%0t] SB: ERROR ARP opcode mismatch: expected 0002, got %04h", $time, frm.arp_opcode);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ARP opcode correct (reply)", $time);
-        end
-    endtask
-
-    task check_icmp_echo_reply(input bit [15:0] exp_id, input bit [15:0] exp_seq,
-                               ref ludp_rx_frame frm);
-        begin
-            if (frm == null) begin
-                $display("[%0t] SB: ERROR - No frame for ICMP check", $time);
-                error_count = error_count + 1;
-                return;
-            end
-
-            check_count = check_count + 1;
-
-            if (frm.eth_dst !== HOST_MAC) begin
-                $display("[%0t] SB: ERROR ICMP dst MAC mismatch", $time);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ICMP dst MAC correct", $time);
-
-            if (frm.eth_src !== DUT_MAC) begin
-                $display("[%0t] SB: ERROR ICMP src MAC mismatch", $time);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ICMP src MAC correct", $time);
-
-            if (frm.icmp_type !== 8'h00) begin
-                $display("[%0t] SB: ERROR ICMP type mismatch: expected 00, got %02h", $time, frm.icmp_type);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ICMP type correct (echo reply)", $time);
-
-            if (frm.icmp_id !== exp_id) begin
-                $display("[%0t] SB: ERROR ICMP ID mismatch: expected %04h, got %04h", $time, exp_id, frm.icmp_id);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ICMP ID correct", $time);
-
-            if (frm.icmp_seq !== exp_seq) begin
-                $display("[%0t] SB: ERROR ICMP seq mismatch: expected %04h, got %04h", $time, exp_seq, frm.icmp_seq);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS ICMP seq correct", $time);
-        end
-    endtask
-
-    task check_prbs(ref ludp_rx_frame frm, output int err_count);
-        begin
-            if (frm == null) begin
-                err_count = 1;
-                return;
-            end
-            frm.verify_prbs(err_count);
-            if (err_count == 0)
-                prbs_ok_count = prbs_ok_count + 1;
-            else
-                prbs_err_count = prbs_err_count + 1;
-        end
-    endtask
-
-    task check_ip_destination(input bit [31:0] exp_ip, ref ludp_rx_frame frm);
-        begin
-            if (frm == null) begin
-                $display("[%0t] SB: ERROR - No frame for IP check", $time);
-                error_count = error_count + 1;
-                return;
-            end
-
-            if (frm.ip_dst !== exp_ip) begin
-                $display("[%0t] SB: ERROR IP destination mismatch: expected %08h, got %08h", $time, exp_ip, frm.ip_dst);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS IP destination correct", $time);
-        end
-    endtask
-
-    task check_udp_checksum_zero(ref ludp_rx_frame frm);
-        begin
-            if (frm == null) begin
-                $display("[%0t] SB: ERROR - No frame for UDP checksum check", $time);
-                error_count = error_count + 1;
-                return;
-            end
-
-            if (frm.udp_checksum !== 16'h0000) begin
-                $display("[%0t] SB: ERROR UDP checksum=%04h (expected 0000)", $time, frm.udp_checksum);
-                error_count = error_count + 1;
-            end else
-                $display("[%0t] SB: PASS UDP checksum=0", $time);
-        end
-    endtask
-
-    function void report();
-        $display("");
-        $display("========================================");
-        $display(" Scoreboard Report");
-        $display("========================================");
-        $display("  Checks:      %0d", check_count);
-        $display("  Errors:      %0d", error_count);
-        $display("  PRBS OK:     %0d", prbs_ok_count);
-        $display("  PRBS ERR:    %0d", prbs_err_count);
-        $display("========================================");
+    virtual function void report_phase(uvm_phase phase);
+        `uvm_info("SB", "", UVM_NONE)
+        `uvm_info("SB", "========================================", UVM_NONE)
+        `uvm_info("SB", " Scoreboard Report", UVM_NONE)
+        `uvm_info("SB", "========================================", UVM_NONE)
+        `uvm_info("SB", $sformatf("  Total checks:    %0d", check_count), UVM_NONE)
+        `uvm_info("SB", $sformatf("  Errors:          %0d", error_count), UVM_NONE)
+        `uvm_info("SB", $sformatf("  ARP replies:     %0d", arp_reply_count), UVM_NONE)
+        `uvm_info("SB", $sformatf("  ICMP replies:    %0d", icmp_reply_count), UVM_NONE)
+        `uvm_info("SB", $sformatf("  CMD_ACK:         %0d", cmd_ack_count), UVM_NONE)
+        `uvm_info("SB", $sformatf("  CMD_CPL:         %0d", cmd_cpl_count), UVM_NONE)
+        `uvm_info("SB", $sformatf("  DATA frames:     %0d", data_frame_count), UVM_NONE)
+        `uvm_info("SB", $sformatf("  PRBS OK:         %0d", prbs_ok_count), UVM_NONE)
+        `uvm_info("SB", $sformatf("  PRBS ERR:        %0d", prbs_err_count), UVM_NONE)
+        `uvm_info("SB", "========================================", UVM_NONE)
     endfunction
 
 endclass
