@@ -222,6 +222,17 @@ clean:
 	rm -f sim-*.log
 	rm -f dve.ucli
 	rm -rf DVEfiles
+	# Coverage databases
+	rm -rf simv.cm simv.cm.vdb simv.vdb
+	rm -rf simv_*.vdb simv_*.daidir
+	# Coverage report and debug XML
+	rm -rf coverage_report
+	rm -f *.fsm.sch.verilog.xml
+	rm -f tr_db.log
+	# All log files
+	rm -f *.log
+	# UVM DPI
+	rm -f uvm_dpi.cc
 
 distclean: clean
 	rm -rf DVEfiles

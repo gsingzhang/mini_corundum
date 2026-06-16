@@ -1,0 +1,36 @@
+# ===== VCS build artifacts =====
+# Simulated executables
+simv
+simv_*
+# VCS compilation directories
+csrc/
+*.daidir/
+# VCS intermediate files
+vc_hdrs.h
+.vlogansetup.args
+.vlogansetup.env
+filelist.f
+ucli.key
+dve.ucli
+# ===== Coverage databases and reports =====
+*.vdb/
+*.cm/
+# Coverage XML debug dumps
+*.fsm.sch.verilog.xml
+# Coverage report output
+coverage_report/
+tr_db.log
+# ===== Logs =====
+*.log
+# ===== Waveform files =====
+*.vpd
+*.vcd
+*.fsdb
+# ===== Debug tool directories =====
+verdiLog/
+DVEfiles/
+AN.DB/
+novas*
+*.rc
+# ===== UVM =====
+uvm_dpi.cc
