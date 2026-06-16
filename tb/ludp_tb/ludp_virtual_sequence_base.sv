@@ -85,6 +85,20 @@ class ludp_virtual_sequence_base extends uvm_sequence;
         seq.send_ludp_raw(pkt_type, flags, seq_num, opcode, arg1, arg2, payload_len, tuser_err);
     endtask
 
+    task send_ludp_bad_magic(input bit [15:0] bad_magic,
+                             input bit [7:0] pkt_type = TYPE_CMD,
+                             input bit [7:0] flags = 8'h00,
+                             input bit [31:0] seq_num = 32'h0,
+                             input bit [15:0] opcode = 16'h0,
+                             input bit [31:0] arg1 = 32'h0,
+                             input bit [15:0] arg2 = 16'h0,
+                             input int payload_len = 0);
+        ludp_base_seq seq;
+        seq = ludp_base_seq::type_id::create("seq");
+        seq.start(p_sequencer.ludp_seqr);
+        seq.send_ludp_raw_with_magic(bad_magic, pkt_type, flags, seq_num, opcode, arg1, arg2, payload_len);
+    endtask
+
     task wait_clocks(input int n);
         repeat(n) @(posedge p_sequencer.vif.clk);
     endtask

@@ -112,4 +112,26 @@ class ludp_base_seq extends uvm_sequence #(ludp_txn);
         finish_item(txn);
     endtask
 
+    task send_ludp_raw_with_magic(input bit [15:0] magic_val,
+                                  input bit [7:0] pkt_type, input bit [7:0] flags,
+                                  input bit [31:0] seq_num, input bit [15:0] opcode,
+                                  input bit [31:0] arg1, input bit [15:0] arg2,
+                                  input int payload_len);
+        ludp_txn txn;
+        txn = ludp_txn::type_id::create("txn");
+        start_item(txn);
+        txn.stim_cmd = CMD_LUDP_CMD;
+        txn.pkt_type = pkt_type;
+        txn.flags    = flags;
+        txn.seq_num  = seq_num;
+        txn.opcode   = opcode;
+        txn.arg1     = arg1;
+        txn.arg2     = arg2;
+        txn.payload_len = payload_len;
+        txn.magic_val = magic_val;
+        txn.use_custom_magic = 1'b1;
+        txn.tuser_err = 1'b0;
+        finish_item(txn);
+    endtask
+
 endclass

@@ -86,6 +86,24 @@ VCS_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
     -o simv \
     -no_stack_annotator
 
+VCS_COV_FLAGS = -cm line+cond+fsm+tgl+branch \
+    -cm_dir simv.cm
+
+VCS_COV_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
+    +v2k \
+    +v2k_generate \
+    +libext+.v+.sv \
+    -ignore initializer_driver_checks \
+    -ntb_opts uvm-1.2 \
+    -CFLAGS "-DVCS" \
+    -f filelist.f \
+    -top $(TB_TOP) \
+    -o simv \
+    -no_stack_annotator \
+    -cm line+cond+branch \
+    -cm_dir simv.cm \
+    -lca
+
 SIMV = ./simv
 
 UVM_TEST_NAME = ludp_test_base
@@ -144,11 +162,27 @@ filelist.f: Makefile
 compile: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS)
 
+compile-cov: filelist.f
+	$(VCS) $(VCS_COV_BASE_FLAGS)
+
 compile-vcd: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+VCD_DUMP
 
 sim: compile
 	setarch x86_64 -R $(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW -suppress=ASLR_DETECTED_INFO
+
+sim-cov: compile-cov
+	setarch x86_64 -R $(SIMV) +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW -cm line+cond+branch -cm_dir simv.cm -cm_name $(UVM_VSEQ) -cm_log coverage.log 2>&1 | tee sim_output.log
+	@echo ""
+	@echo "========================================"
+	@echo "Code Coverage Summary"
+	@echo "========================================"
+	@LD_LIBRARY_PATH=/home/gxzhang/gx/gxprogram/synopsys/vcs/W-2024.09-SP1/vcfca/auxx/monet/lintllm/_internal:$$LD_LIBRARY_PATH urg -dir simv.cm -report coverage_report -format text 2>&1 | grep -E "ludp|fpga_core|SCORE|Line|Cond|Branch|total|covered" | head -30 || true
+	@echo ""
+	@echo "========================================"
+	@echo "Code Coverage Report"
+	@echo "========================================"
+	urg -dir simv.cm -report coverage_report
 
 sim-test: compile
 	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW

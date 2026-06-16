@@ -14,6 +14,8 @@ class test_all_vseq extends ludp_virtual_sequence_base;
         error_resilience_vseq    seq6;
         internal_mechanisms_vseq seq7;
         coverage_enhance_vseq    seq8;
+        rx_codecov_vseq          seq9;
+        tx_dma_codecov_vseq      seq10;
         super.body();
 
         `uvm_info("VSEQ", "", UVM_NONE)
@@ -44,6 +46,12 @@ class test_all_vseq extends ludp_virtual_sequence_base;
 
         seq8 = coverage_enhance_vseq::type_id::create("seq8");
         seq8.start(p_sequencer);
+
+        seq9 = rx_codecov_vseq::type_id::create("seq9");
+        seq9.start(p_sequencer);
+
+        seq10 = tx_dma_codecov_vseq::type_id::create("seq10");
+        seq10.start(p_sequencer);
 
         `uvm_info("VSEQ", "", UVM_NONE)
         `uvm_info("VSEQ", "========================================", UVM_NONE)

@@ -20,6 +20,9 @@ class ludp_txn extends uvm_sequence_item;
 
     rand bit tuser_err;
 
+    rand bit [15:0] magic_val;
+    rand bit        use_custom_magic;
+
     rand bit [15:0] payload_size;
     rand bit [31:0] credit;
     rand bit [31:0] nack_seq;

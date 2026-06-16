@@ -70,10 +70,13 @@ class ludp_driver extends uvm_driver #(ludp_txn);
     endtask
 
     task drive_ludp_cmd(ludp_txn txn);
-        `uvm_info("DRV", $sformatf("CMD opcode=%04h arg1=%08h arg2=%04h flags=%02h",
-                 txn.opcode, txn.arg1, txn.arg2, txn.flags), UVM_HIGH)
+        `uvm_info("DRV", $sformatf("CMD opcode=%04h arg1=%08h arg2=%04h flags=%02h magic=%04h use_custom=%0b",
+                 txn.opcode, txn.arg1, txn.arg2, txn.flags, txn.magic_val, txn.use_custom_magic), UVM_HIGH)
         if (txn.tuser_err)
             send_ludp_packet_with_tuser_err(txn.pkt_type, txn.flags, txn.seq_num,
+                txn.opcode, txn.arg1, txn.arg2, txn.payload_len);
+        else if (txn.use_custom_magic)
+            send_ludp_packet_with_magic(txn.magic_val, txn.pkt_type, txn.flags, txn.seq_num,
                 txn.opcode, txn.arg1, txn.arg2, txn.payload_len);
         else
             send_ludp_packet(txn.pkt_type, txn.flags, txn.seq_num,
@@ -369,6 +372,69 @@ class ludp_driver extends uvm_driver #(ludp_txn);
             build_ludp_packet(pkt_type, flags, seq_num, opcode, arg1, arg2, payload_len);
             udp_len = 8 + 16 + payload_len;
             send_xgmii_frame_with_err(34 + udp_len);
+        end
+    endtask
+
+    task send_ludp_packet_with_magic(input bit [15:0] magic_val,
+                                      input bit [7:0] pkt_type, input bit [7:0] flags,
+                                      input bit [31:0] seq_num, input bit [15:0] opcode,
+                                      input bit [31:0] arg1, input bit [15:0] arg2,
+                                      input int payload_len);
+        int udp_len;
+        int total_len;
+        int i;
+        bit [159:0] ip_hdr;
+        bit [15:0] cksum;
+        begin
+            udp_len = 8 + 16 + payload_len;
+            total_len = 20 + udp_len;
+
+            for (i = 0; i < 60; i++) frame_data[i] = 8'h00;
+
+            frame_data[0]  = DUT_MAC[47:40];  frame_data[1]  = DUT_MAC[39:32];
+            frame_data[2]  = DUT_MAC[31:24];  frame_data[3]  = DUT_MAC[23:16];
+            frame_data[4]  = DUT_MAC[15:8];   frame_data[5]  = DUT_MAC[7:0];
+            frame_data[6]  = HOST_MAC[47:40]; frame_data[7]  = HOST_MAC[39:32];
+            frame_data[8]  = HOST_MAC[31:24]; frame_data[9]  = HOST_MAC[23:16];
+            frame_data[10] = HOST_MAC[15:8];  frame_data[11] = HOST_MAC[7:0];
+            frame_data[12] = 8'h08; frame_data[13] = 8'h00;
+
+            frame_data[14] = 8'h45; frame_data[15] = 8'h00;
+            frame_data[16] = total_len[15:8]; frame_data[17] = total_len[7:0];
+            frame_data[18] = 8'h00; frame_data[19] = 8'h01;
+            frame_data[20] = 8'h00; frame_data[21] = 8'h00;
+            frame_data[22] = 8'h40; frame_data[23] = 8'h11;
+            frame_data[24] = 8'h00; frame_data[25] = 8'h00;
+            frame_data[26] = HOST_IP[31:24]; frame_data[27] = HOST_IP[23:16];
+            frame_data[28] = HOST_IP[15:8];  frame_data[29] = HOST_IP[7:0];
+            frame_data[30] = DUT_IP[31:24];  frame_data[31] = DUT_IP[23:16];
+            frame_data[32] = DUT_IP[15:8];   frame_data[33] = DUT_IP[7:0];
+
+            ip_hdr = {DUT_IP, HOST_IP, 16'h0000, 16'h4011, 16'h0000, 16'h0001, total_len[15:0], 16'h4500};
+            cksum = ip_checksum(ip_hdr);
+            frame_data[24] = cksum[15:8];
+            frame_data[25] = cksum[7:0];
+
+            frame_data[34] = LUDP_PORT[15:8]; frame_data[35] = LUDP_PORT[7:0];
+            frame_data[36] = LUDP_PORT[15:8]; frame_data[37] = LUDP_PORT[7:0];
+            frame_data[38] = udp_len[15:8];  frame_data[39] = udp_len[7:0];
+            frame_data[40] = 8'h00; frame_data[41] = 8'h00;
+
+            frame_data[42] = magic_val[7:0];  frame_data[43] = magic_val[15:8];
+            frame_data[44] = pkt_type;     frame_data[45] = flags;
+            frame_data[46] = seq_num[7:0];  frame_data[47] = seq_num[15:8];
+            frame_data[48] = seq_num[23:16]; frame_data[49] = seq_num[31:24];
+
+            frame_data[50] = opcode[7:0];  frame_data[51] = opcode[15:8];
+            frame_data[52] = arg1[7:0];    frame_data[53] = arg1[15:8];
+            frame_data[54] = arg1[23:16];  frame_data[55] = arg1[31:24];
+            frame_data[56] = arg2[7:0];    frame_data[57] = arg2[15:8];
+            frame_data[58] = 8'h00;        frame_data[59] = 8'h00;
+
+            for (i = 0; i < payload_len; i++)
+                frame_data[60 + i] = 8'h00;
+
+            send_xgmii_frame(34 + udp_len);
         end
     endtask
 
