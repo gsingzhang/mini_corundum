@@ -33,6 +33,7 @@ module ludp_tx_scheduler #(
 
     // ---- TX read request (from protocol layer) ------------------------------
     output logic        tx_pkt_ready,    // a READY block exists
+    output logic        sch_ready,       // scheduler can issue a new DMA read
     input  wire         tx_pkt_start,    // protocol layer starts reading
     input  wire [31:0]  tx_pkt_seq,      // sequence number assigned by protocol
     output logic        tx_pkt_done,     // 1-cycle pulse: TX read finished
@@ -141,6 +142,8 @@ module ludp_tx_scheduler #(
     logic       sch_is_retx_reg;
 
     wire sch_can_issue = !dma_rd_busy;
+
+    assign sch_ready = (sch_state_reg == SCH_IDLE) && sch_can_issue;
 
     always_ff @(posedge clk) begin
         if (rst || clear) begin

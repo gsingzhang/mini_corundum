@@ -38,6 +38,7 @@ module ludp_protocol_tx #(
 
     // ---- Scheduler interface ------------------------------------------------
     input  wire        tx_pkt_ready,    // a READY block exists
+    input  wire        sch_ready,       // scheduler can issue a new DMA read
     output logic       tx_pkt_start,    // start reading the current block
     input  wire [31:0] tx_pkt_seq,      // sequence number assigned
     input  wire        rd_is_retx,      // current data is a retransmission
@@ -157,7 +158,7 @@ module ludp_protocol_tx #(
                 TX_IDLE: begin
                     if (resp_ongoing)
                         hdr_valid_reg <= 1'b1;
-                    else if (retx_found || (tx_pkt_ready && f2h_tx_ok))
+                    else if (retx_found || (tx_pkt_ready && f2h_tx_ok && sch_ready))
                         hdr_valid_reg <= 1'b1;
                 end
                 TX_RESP, TX_DATA_HDR: begin
@@ -184,7 +185,7 @@ module ludp_protocol_tx #(
                             tx_header_beat0_reg <= {resp_cmd_id, resp_status, TYPE_CMD_ACK, MAGIC};
                             tx_header_beat1_reg <= {48'h0, resp_opcode};
                         end
-                    end else if (retx_found || (tx_pkt_ready && f2h_tx_ok)) begin
+                    end else if (retx_found || (tx_pkt_ready && f2h_tx_ok && sch_ready)) begin
                         tx_state_reg          <= TX_DATA_HDR;
                         tx_payload_size_reg   <= rd_pkt_size;
                         tx_header_beat0_reg   <= {rd_pkt_seq, 8'h00, TYPE_DATA, MAGIC};
@@ -229,7 +230,7 @@ module ludp_protocol_tx #(
 
     assign tx_pkt_start = (tx_state_reg == TX_IDLE) && !resp_ongoing &&
                           !retx_found &&
-                          tx_pkt_ready && f2h_tx_ok;
+                          tx_pkt_ready && f2h_tx_ok && sch_ready;
 
     assign data_in_tready = (tx_state_reg == TX_DATA) && tx_axis_s[1].tready;
 

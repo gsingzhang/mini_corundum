@@ -387,6 +387,13 @@ assign ludp_dma_axis_tuser  = ludp_tx_fifo_axis_tuser;
 assign ludp_dma_pkt_size    = test_data_payload_size_reg;
 assign ludp_tx_fifo_axis_tready = ludp_dma_axis_tready;
 
+// AXI4 interface for DDR buffer
+taxi_axi_if #(
+    .DATA_W(64),
+    .ADDR_W(32),
+    .ID_W(1)
+) ludp_axi_if_inst ();
+
 // LUDP Protocol Instance
 ludp_protocol #(
     .DATA_WIDTH(64),
@@ -467,17 +474,8 @@ ludp_protocol_inst (
     .cmd_count(ludp_cmd_count),
     .last_payload_size(ludp_last_payload_size),
 
-    .retx_mem_wr_addr (ludp_retx_mem_wr_addr),
-    .retx_mem_wr_data (ludp_retx_mem_wr_data),
-    .retx_mem_wr_strb (ludp_retx_mem_wr_strb),
-    .retx_mem_wr_valid(ludp_retx_mem_wr_valid),
-    .retx_mem_wr_ready(ludp_retx_mem_wr_ready),
-
-    .retx_mem_rd_addr  (ludp_retx_mem_rd_addr),
-    .retx_mem_rd_valid (ludp_retx_mem_rd_valid),
-    .retx_mem_rd_ready (ludp_retx_mem_rd_ready),
-    .retx_mem_rd_data  (ludp_retx_mem_rd_data),
-    .retx_mem_rd_valid_in(ludp_retx_mem_rd_valid_in)
+    .m_axi_wr(ludp_axi_if_inst.wr_mst),
+    .m_axi_rd(ludp_axi_if_inst.rd_mst)
 );
 
 assign ludp_status_opcode = 16'h0;
@@ -485,39 +483,14 @@ assign ludp_status_data  = {f2h_tx_enabled_dly, 31'h0};
 assign ludp_status_valid = 1'b0;
 assign ludp_cmd_ready    = 1'b1;
 
-// Retx buffer external memory model (simple 1R1W RAM)
-// In real application, this connects to DDR/AXI RAM
-taxi_ram_1r1w_1c #(
-    .ADDR_W(16),
-    .DATA_W(64),
-    .STRB_EN(1'b1),
-    .STRB_W(8)
-) retx_ram_inst (
+taxi_axi_ram #(
+    .ADDR_W(20)
+) ludp_axi_ram_inst (
     .clk(clk),
-
-    .wr_en(ludp_retx_mem_wr_valid),
-    .wr_addr(ludp_retx_mem_wr_addr[15:0]),
-    .wr_data(ludp_retx_mem_wr_data),
-    .wr_strb(ludp_retx_mem_wr_strb),
-
-    .rd_en(ludp_retx_mem_rd_valid),
-    .rd_addr(ludp_retx_mem_rd_addr[15:0]),
-    .rd_data(ludp_retx_mem_rd_data)
+    .rst(rst),
+    .s_axi_wr(ludp_axi_if_inst.wr_slv),
+    .s_axi_rd(ludp_axi_if_inst.rd_slv)
 );
-
-assign ludp_retx_mem_wr_ready = 1'b1;
-assign ludp_retx_mem_rd_ready = 1'b1;
-
-// taxi_ram_1r1w_1c has 1-cycle read latency: data is valid the cycle AFTER rd_en.
-// Delay rd_valid by 1 cycle to match.
-reg ludp_retx_mem_rd_valid_d;
-always @(posedge clk) begin
-    if (rst)
-        ludp_retx_mem_rd_valid_d <= 1'b0;
-    else
-        ludp_retx_mem_rd_valid_d <= ludp_retx_mem_rd_valid;
-end
-assign ludp_retx_mem_rd_valid_in = ludp_retx_mem_rd_valid_d;
 
 // LED output: show burst status and command count
 reg [7:0] led_reg = 0;

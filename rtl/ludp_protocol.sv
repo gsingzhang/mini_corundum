@@ -79,17 +79,8 @@ module ludp_protocol #(
     output logic [31:0] cmd_count,
     output logic [15:0] last_payload_size,
 
-    output logic [31:0] retx_mem_wr_addr,
-    output logic [DATA_WIDTH-1:0] retx_mem_wr_data,
-    output logic [KEEP_WIDTH-1:0] retx_mem_wr_strb,
-    output logic                  retx_mem_wr_valid,
-    input  wire                   retx_mem_wr_ready,
-
-    output logic [31:0] retx_mem_rd_addr,
-    output logic                  retx_mem_rd_valid,
-    input  wire                   retx_mem_rd_ready,
-    input  wire  [DATA_WIDTH-1:0] retx_mem_rd_data,
-    input  wire                   retx_mem_rd_valid_in
+    taxi_axi_if.wr_mst           m_axi_wr,
+    taxi_axi_if.rd_mst           m_axi_rd
 );
 
     logic [31:0] seq_num_reg;
@@ -126,7 +117,6 @@ module ludp_protocol #(
     logic [31:0] rx_src_ip;
     logic [15:0] rx_src_port;
 
-    // ======== Internal wires: Scheduler <-> DMA ==============================
     logic                  sch_dma_rd_req;
     logic [31:0]           sch_dma_rd_base_addr;
     logic [15:0]           sch_dma_rd_total_beats;
@@ -137,7 +127,6 @@ module ludp_protocol #(
     logic                  sch_dma_wr_enable;
     logic                  dma_wr_done;
 
-    // ======== Internal wires: DMA -> Protocol TX =============================
     logic [DATA_WIDTH-1:0] dma_rd_axis_tdata;
     logic [KEEP_WIDTH-1:0] dma_rd_axis_tkeep;
     logic                  dma_rd_axis_tvalid;
@@ -146,8 +135,8 @@ module ludp_protocol #(
     logic                  dma_rd_axis_tuser;
     logic                  dma_rd_axis_done;
 
-    // ======== Internal wires: Scheduler -> Protocol TX =======================
     logic        sch_tx_pkt_ready;
+    logic        sch_ready;
     logic        sch_tx_pkt_start;
     logic [31:0] sch_tx_pkt_seq;
     logic        sch_tx_pkt_done;
@@ -156,7 +145,10 @@ module ludp_protocol #(
     logic [31:0] sch_rd_pkt_seq;
     logic        sch_rd_is_retx;
 
-    // ======== RX Instance ====================================================
+    logic [15:0] dma_wr_total_beats;
+
+    assign dma_wr_total_beats = (dma_pkt_size + KEEP_WIDTH - 1) / KEEP_WIDTH;
+
     ludp_protocol_rx #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
@@ -230,7 +222,6 @@ module ludp_protocol #(
         .resp_ongoing(resp_ongoing_reg)
     );
 
-    // ======== Scheduler Instance =============================================
     ludp_tx_scheduler #(
         .NUM_BLOCKS(NUM_BLOCKS),
         .KEEP_WIDTH(KEEP_WIDTH),
@@ -246,6 +237,7 @@ module ludp_protocol #(
         .dma_pkt_size    (dma_pkt_size),
 
         .tx_pkt_ready   (sch_tx_pkt_ready),
+        .sch_ready      (sch_ready),
         .tx_pkt_start   (sch_tx_pkt_start),
         .tx_pkt_seq     (sch_tx_pkt_seq),
         .tx_pkt_done    (sch_tx_pkt_done),
@@ -268,9 +260,7 @@ module ludp_protocol #(
         .rd_is_retx        (sch_rd_is_retx)
     );
 
-    // ======== DMA Instance ===================================================
-
-    ludp_tx_dma #(
+    ludp_tx_dma_axi #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
         .MAX_PAYLOAD_BYTES(MAX_PAYLOAD_BYTES),
@@ -289,6 +279,7 @@ module ludp_protocol #(
         .wr_axis_tuser (dma_axis_tuser),
 
         .wr_desc_base_addr  (sch_dma_wr_base_addr),
+        .wr_desc_total_beats(dma_wr_total_beats),
         .wr_desc_enable     (sch_dma_wr_enable),
         .wr_done(dma_wr_done),
 
@@ -305,20 +296,10 @@ module ludp_protocol #(
         .rd_axis_tuser (dma_rd_axis_tuser),
         .rd_done  (dma_rd_done),
 
-        .mem_wr_addr  (retx_mem_wr_addr),
-        .mem_wr_data  (retx_mem_wr_data),
-        .mem_wr_strb  (retx_mem_wr_strb),
-        .mem_wr_valid (retx_mem_wr_valid),
-        .mem_wr_ready (retx_mem_wr_ready),
-
-        .mem_rd_addr    (retx_mem_rd_addr),
-        .mem_rd_valid   (retx_mem_rd_valid),
-        .mem_rd_ready   (retx_mem_rd_ready),
-        .mem_rd_data    (retx_mem_rd_data),
-        .mem_rd_valid_in(retx_mem_rd_valid_in)
+        .m_axi_wr(m_axi_wr),
+        .m_axi_rd(m_axi_rd)
     );
 
-    // ======== Protocol TX Instance ===========================================
     ludp_protocol_tx #(
         .DATA_WIDTH(DATA_WIDTH),
         .KEEP_WIDTH(KEEP_WIDTH),
@@ -342,6 +323,7 @@ module ludp_protocol #(
         .data_in_done  (dma_rd_done),
 
         .tx_pkt_ready   (sch_tx_pkt_ready),
+        .sch_ready      (sch_ready),
         .tx_pkt_start   (sch_tx_pkt_start),
         .tx_pkt_seq     (sch_tx_pkt_seq),
         .rd_is_retx     (sch_rd_is_retx),
@@ -388,7 +370,6 @@ module ludp_protocol #(
         .last_payload_size(last_payload_size)
     );
 
-    // ======== Global state management ========================================
     always_ff @(posedge clk) begin
         if (rst) begin
             seq_num_reg       <= 0;

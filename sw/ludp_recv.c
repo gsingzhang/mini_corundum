@@ -9,6 +9,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <process.h>
 typedef int socklen_t;
 #else
 #include <sys/socket.h>
@@ -49,6 +50,8 @@ typedef int socklen_t;
 
 #define REORDER_BUFFER_SIZE 256
 #define REORDER_TIMEOUT_MS  50
+#define RECV_BATCH_SIZE     4096
+#define NACK_MIN_INTERVAL_MS 2
 
 typedef struct {
     uint64_t packets_received;
@@ -65,6 +68,7 @@ typedef struct {
     int len;
     uint64_t timestamp;
     int valid;
+    int written;
 } reorder_buffer_entry_t;
 
 typedef struct {
@@ -330,50 +334,42 @@ static void set_nonblocking(int fd) {
 #endif
 }
 
-static inline void process_data_packet(const uint8_t *data, int len, FILE *out_fp) {
-    if (len < LUDP_HDR_LEN) return;
+static inline int fast_recv_packet(const uint8_t *data, int len) {
+    if (len < LUDP_HDR_LEN) return 0;
 
     uint16_t magic = data[0] | (data[1] << 8);
-    if (magic != LUDP_MAGIC) return;
+    if (magic != LUDP_MAGIC) return 0;
 
     uint8_t pkt_type = data[2];
-    if (pkt_type != PKT_DATA) return;
+    if (pkt_type != PKT_DATA) return 0;
 
     uint32_t seq = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
-    uint16_t payload_len = data[8] | (data[9] << 8);
 
     stats.packets_received++;
     stats.bytes_received += len;
     stats.last_seq = seq;
-
     if (seq > highest_seq) highest_seq = seq;
 
     if (seq == expected_seq) {
-        stats.packets_processed++;
-        if (out_fp && payload_len > 0) {
-            fwrite(data + LUDP_HDR_LEN, 1, payload_len, out_fp);
-        }
         expected_seq++;
-
         while (1) {
-            uint8_t buf_data[MAX_PKT_SIZE];
-            int buf_len;
-            int idx = reorder_buffer_get_next(&reorder_buf, expected_seq, buf_data, &buf_len);
-            if (idx < 0) break;
-
-            uint16_t buf_payload_len = buf_data[8] | (buf_data[9] << 8);
-            stats.packets_processed++;
-            if (out_fp && buf_payload_len > 0) {
-                fwrite(buf_data + LUDP_HDR_LEN, 1, buf_payload_len, out_fp);
+            int found = 0;
+            for (int i = 0; i < REORDER_BUFFER_SIZE; i++) {
+                if (reorder_buf.entries[i].valid && reorder_buf.entries[i].seq == expected_seq) {
+                    found = 1;
+                    break;
+                }
             }
-            reorder_buf.entries[idx].valid = 0;
-            reorder_buf.count--;
+            if (!found) break;
             expected_seq++;
         }
+        return 1;
     } else if (seq > expected_seq) {
         stats.packets_out_of_order++;
         reorder_buffer_insert(&reorder_buf, seq, data, len);
+        return -1;
     }
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -514,10 +510,16 @@ int main(int argc, char *argv[]) {
         uint64_t now = get_time_ms();
         if (!continuous && (now - start_time >= (uint64_t)duration * 1000)) break;
 
+        // ======== Phase 1: FAST RECV — drain kernel buffer ASAP ============
+        // recv → fast_recv_packet (update expected_seq + reorder buffer)
+        // → immediate NACK if gap detected (FPGA only has 3 block buffer!)
+        // → fwrite for in-order packets (can't defer, data on stack)
+        int need_nack = 0;
         int got_data = 0;
         int rx_count = 0;
-        for (int b = 0; b < 1024; b++) {
-            uint8_t buf[MAX_PKT_SIZE];
+        uint8_t buf[MAX_PKT_SIZE];
+
+        for (int b = 0; b < RECV_BATCH_SIZE; b++) {
             struct sockaddr_in from_addr;
             socklen_t from_len = sizeof(from_addr);
             int n = recvfrom(sock_fd, (char *)buf, MAX_PKT_SIZE, 0,
@@ -537,43 +539,62 @@ int main(int argc, char *argv[]) {
             if (magic != LUDP_MAGIC) continue;
 
             uint8_t pkt_type = buf[2];
+
             if (pkt_type == PKT_DATA) {
-                uint64_t prev_rx = stats.packets_received;
-                process_data_packet(buf, n, out_fp);
-                if (stats.packets_received > prev_rx) {
+                int result = fast_recv_packet(buf, n);
+                if (result == 1) {
+                    uint16_t payload_len = buf[8] | (buf[9] << 8);
+                    stats.packets_processed++;
+                    if (out_fp && payload_len > 0) {
+                        fwrite(buf + LUDP_HDR_LEN, 1, payload_len, out_fp);
+                    }
                     interval_stats.packets_received++;
                     interval_stats.bytes_received += n;
-                    interval_stats.packets_processed++;
-                    if (stats.packets_out_of_order > interval_stats.packets_out_of_order) {
-                        interval_stats.packets_out_of_order++;
-                        interval_stats.gap_count += stats.gap_count - interval_stats.gap_count;
-                    }
-                    rx_count++;
+                } else if (result == -1) {
+                    need_nack = 1;
                 }
                 got_data = 1;
+                rx_count++;
             } else if (pkt_type == PKT_CMD_ACK || pkt_type == PKT_CMD_CPL) {
                 if (debug) {
                     uint32_t rx_cmd_id = buf[4] | (buf[5] << 8) | (buf[6] << 16) | (buf[7] << 24);
                     printf("[DEBUG RX] CMD_ACK/CPL cmd_id=%u\n", rx_cmd_id);
                 }
             }
+        }
 
-            if (rx_count >= CREDIT_INTERVAL) {
-                uint32_t new_credit = expected_seq + window_size;
-                if (new_credit > abs_credit) {
-                    build_credit(credit_pkt, new_credit);
-                    sendto(sock_fd, (const char *)credit_pkt, 16, 0,
-                           (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
-                    abs_credit = new_credit;
-                    last_credit_seq = expected_seq;
-                    last_credit_time = get_time_ms();
-                }
-                rx_count = 0;
+        // ======== Immediate NACK — FPGA only has 3 block buffer ============
+        if (need_nack) {
+            now = get_time_ms();
+            if (now - last_nack_time >= NACK_MIN_INTERVAL_MS) {
+                send_nack(expected_seq);
+                last_nack_time = now;
             }
         }
 
+        // ======== Phase 2: Credit + NACK + Stats ==============================
         if (got_data) last_data_time = get_time_ms();
 
+        // Write reorder buffer entries that are now in-order to file
+        for (int i = 0; i < REORDER_BUFFER_SIZE; i++) {
+            if (reorder_buf.entries[i].valid && !reorder_buf.entries[i].written) {
+                uint32_t entry_seq = reorder_buf.entries[i].seq;
+                if (entry_seq < expected_seq) {
+                    uint16_t buf_payload_len = reorder_buf.entries[i].data[8] |
+                                                (reorder_buf.entries[i].data[9] << 8);
+                    stats.packets_processed++;
+                    if (out_fp && buf_payload_len > 0) {
+                        fwrite(reorder_buf.entries[i].data + LUDP_HDR_LEN, 1, buf_payload_len, out_fp);
+                    }
+                    reorder_buf.entries[i].valid = 0;
+                    reorder_buf.entries[i].written = 0;
+                    reorder_buf.count--;
+                }
+            }
+        }
+
+        // Credit update
+        now = get_time_ms();
         if (expected_seq != last_credit_seq) {
             uint32_t new_credit = expected_seq + window_size;
             if (new_credit > abs_credit) {
@@ -582,11 +603,10 @@ int main(int argc, char *argv[]) {
                        (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
                 abs_credit = new_credit;
                 last_credit_seq = expected_seq;
-                last_credit_time = get_time_ms();
+                last_credit_time = now;
             }
         }
 
-        now = get_time_ms();
         uint64_t data_gap_ms = now - last_data_time;
         int credit_interval_ms = (data_gap_ms > 500) ? 10 : 100;
         if (now - last_credit_time >= (uint64_t)credit_interval_ms) {
@@ -598,32 +618,24 @@ int main(int argc, char *argv[]) {
             last_credit_time = now;
         }
 
+        // Reorder buffer timeout + NACK for stuck gaps
         reorder_buffer_flush_timeout(&reorder_buf, now);
 
-        if (reorder_buf.count > 0 && (now - last_nack_time >= 10)) {
+        if (reorder_buf.count > 0 && (now - last_nack_time >= NACK_MIN_INTERVAL_MS)) {
             send_nack(expected_seq);
-            uint32_t new_credit = expected_seq + window_size;
-            build_credit(credit_pkt, new_credit);
-            sendto(sock_fd, (const char *)credit_pkt, 16, 0,
-                   (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
-            abs_credit = new_credit;
             last_nack_time = now;
         }
 
-        if (data_gap_ms >= 50 && reorder_buf.count == 0 && 
-            highest_seq > expected_seq && (now - last_nack_time >= 10)) {
+        if (data_gap_ms >= 50 && reorder_buf.count == 0 &&
+            highest_seq > expected_seq && (now - last_nack_time >= NACK_MIN_INTERVAL_MS)) {
             send_nack(expected_seq);
-            uint32_t new_credit = expected_seq + window_size;
-            build_credit(credit_pkt, new_credit);
-            sendto(sock_fd, (const char *)credit_pkt, 16, 0,
-                   (struct sockaddr *)&fpga_addr, sizeof(fpga_addr));
-            abs_credit = new_credit;
             last_nack_time = now;
         }
 
+        // Warnings & Recovery
         if (now - last_warn_time >= 2000 && data_gap_ms >= 2000) {
-            printf("[WARN] No data for %.1fs, credit=%u expected=%u seq_highest=%u\n",
-                   data_gap_ms / 1000.0, abs_credit, expected_seq, highest_seq);
+            printf("[WARN] No data for %.1fs, credit=%u expected=%u seq_highest=%u reorder=%u\n",
+                   data_gap_ms / 1000.0, abs_credit, expected_seq, highest_seq, reorder_buf.count);
             last_warn_time = now;
         }
 
@@ -674,6 +686,7 @@ int main(int argc, char *argv[]) {
 #endif
         }
 
+        // Stats
         now = get_time_ms();
         if (now - last_stats_time >= (uint64_t)stats_interval * 1000) {
             double int_elapsed = (now - last_stats_time) / 1000.0;
@@ -689,13 +702,13 @@ int main(int argc, char *argv[]) {
                 100.0 * stats.packets_out_of_order / stats.packets_received : 0;
 
             printf("[STATS] interval: %.1f Mbps %.1f kpps ooo=%.1f%% rx=" PRIu64_FMT " | "
-                   "total: %.1f Mbps %.1f kpps ooo=%.1f%% rx=" PRIu64_FMT " gaps=" PRIu64_FMT " credit=%u exp=%u\n",
+                   "total: %.1f Mbps %.1f kpps ooo=%.1f%% rx=" PRIu64_FMT " gaps=" PRIu64_FMT " credit=%u exp=%u reorder=%u\n",
                    int_mbps, int_kpps, int_ooo_pct,
                    (unsigned long long)interval_stats.packets_received,
                    total_mbps, total_kpps, total_ooo_pct,
                    (unsigned long long)stats.packets_received,
                    (unsigned long long)stats.gap_count,
-                   abs_credit, expected_seq);
+                   abs_credit, expected_seq, reorder_buf.count);
 
             interval_stats = (stats_t){0};
             last_stats_time = now;
