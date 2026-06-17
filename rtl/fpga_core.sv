@@ -651,7 +651,7 @@ ddr4_0 ddr4_inst (
     .c0_ddr4_ui_clk         (ddr4_ui_clk),
     .c0_ddr4_ui_clk_sync_rst(ddr4_ui_rst),
     .c0_init_calib_complete  (ddr4_init_calib_complete),
-    .c0_ddr4_aresetn        (),
+    .c0_ddr4_aresetn        (~ddr4_ui_rst),
 
     .c0_ddr4_s_axi_awid     (ddr4_awid),
     .c0_ddr4_s_axi_awaddr   (ddr4_awaddr_full[30:0]),

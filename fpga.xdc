@@ -221,5 +221,5 @@ set_property -dict {LOC AK22 IOSTANDARD DIFF_POD12_DCI } [get_ports {ddr4_dqs_t[
 set_property -dict {LOC AK23 IOSTANDARD DIFF_POD12_DCI } [get_ports {ddr4_dqs_c[6]}]
 set_property -dict {LOC AM21 IOSTANDARD DIFF_POD12_DCI } [get_ports {ddr4_dqs_t[7]}]
 set_property -dict {LOC AN21 IOSTANDARD DIFF_POD12_DCI } [get_ports {ddr4_dqs_c[7]}]
-set_property -dict {LOC AL21 IOSTANDARD POD12_DCI      } [get_ports {ddr4_dm_dbi_n[6]}]
-set_property -dict {LOC AM22 IOSTANDARD POD12_DCI      } [get_ports {ddr4_dm_dbi_n[7]}]
+set_property -dict {LOC AL20 IOSTANDARD POD12_DCI      } [get_ports {ddr4_dm_dbi_n[6]}]
+set_property -dict {LOC AP19 IOSTANDARD POD12_DCI      } [get_ports {ddr4_dm_dbi_n[7]}]
