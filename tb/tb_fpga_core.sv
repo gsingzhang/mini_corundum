@@ -87,6 +87,55 @@ assign dut_ctrl.block_recycle = dut.ludp_protocol_inst.scheduler_inst.tx_pkt_don
 assign dut_ctrl.resp_ongoing  = dut.ludp_protocol_inst.resp_ongoing_reg;
 assign dut_ctrl.status_valid  = dut.ludp_status_valid;
 
+// AXI burst monitor - logs write/read burst lengths
+integer wr_burst_count = 0;
+integer rd_burst_count = 0;
+integer wr_max_burst   = 0;
+integer rd_max_burst   = 0;
+integer wr_total_beats = 0;
+integer rd_total_beats = 0;
+
+// Monitor AXI write bursts
+always @(posedge clk) begin
+    if (dut.ludp_sim_axi_if_inst.awvalid && dut.ludp_sim_axi_if_inst.awready) begin
+        wr_burst_count = wr_burst_count + 1;
+        wr_total_beats = wr_total_beats + dut.ludp_sim_axi_if_inst.awlen + 1;
+        if (dut.ludp_sim_axi_if_inst.awlen + 1 > wr_max_burst)
+            wr_max_burst = dut.ludp_sim_axi_if_inst.awlen + 1;
+        $display("[%0t] AXI_WR_BURST #%0d: awlen=%0d (beats=%0d) addr=0x%08x",
+                 $time, wr_burst_count, dut.ludp_sim_axi_if_inst.awlen,
+                 dut.ludp_sim_axi_if_inst.awlen + 1, dut.ludp_sim_axi_if_inst.awaddr);
+    end
+end
+
+// Monitor AXI read bursts
+always @(posedge clk) begin
+    if (dut.ludp_sim_axi_if_inst.arvalid && dut.ludp_sim_axi_if_inst.arready) begin
+        rd_burst_count = rd_burst_count + 1;
+        rd_total_beats = rd_total_beats + dut.ludp_sim_axi_if_inst.arlen + 1;
+        if (dut.ludp_sim_axi_if_inst.arlen + 1 > rd_max_burst)
+            rd_max_burst = dut.ludp_sim_axi_if_inst.arlen + 1;
+        $display("[%0t] AXI_RD_BURST #%0d: arlen=%0d (beats=%0d) addr=0x%08x",
+                 $time, rd_burst_count, dut.ludp_sim_axi_if_inst.arlen,
+                 dut.ludp_sim_axi_if_inst.arlen + 1, dut.ludp_sim_axi_if_inst.araddr);
+    end
+end
+
+// Final report
+final begin
+    $display("");
+    $display("========================================");
+    $display(" AXI Burst Summary");
+    $display("========================================");
+    $display(" Write bursts:    %0d", wr_burst_count);
+    $display(" Write total beats: %0d", wr_total_beats);
+    $display(" Write max burst:   %0d beats", wr_max_burst);
+    $display(" Read bursts:     %0d", rd_burst_count);
+    $display(" Read total beats:  %0d", rd_total_beats);
+    $display(" Read max burst:    %0d beats", rd_max_burst);
+    $display("========================================");
+end
+
 always @(posedge clk) begin
     if (dut_ctrl.payload_size_we)
         dut.test_data_payload_size_reg <= dut_ctrl.payload_size;

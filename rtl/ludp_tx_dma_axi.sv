@@ -155,8 +155,8 @@ module ludp_tx_dma_axi #(
         end
     end
 
-    assign dma_wr_desc_addr  = wr_addr_reg;
-    assign dma_wr_desc_len   = wr_axis_total_beats_reg * KEEP_WIDTH;
+    assign dma_wr_desc_addr  = wr_desc_base_addr;
+    assign dma_wr_desc_len   = wr_desc_total_beats * KEEP_WIDTH;
     assign dma_wr_desc_valid = (wr_state_reg == WR_IDLE) && wr_desc_enable && wr_axis_tvalid;
 
     assign dma_wr_axis_tdata  = wr_pack_data_reg;

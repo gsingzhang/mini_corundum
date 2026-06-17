@@ -150,6 +150,7 @@ endfunction
 `include "ludp_tb/vseqs/ludp_vseq_coverage_enhance.sv"
 `include "ludp_tb/vseqs/ludp_vseq_rx_codecov.sv"
 `include "ludp_tb/vseqs/ludp_vseq_tx_dma_codecov.sv"
+`include "ludp_tb/vseqs/ludp_vseq_throughput_stress.sv"
 `include "ludp_tb/vseqs/ludp_vseq_test_all.sv"
 
 `include "ludp_tb/ludp_test_lib.sv"
