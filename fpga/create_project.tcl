@@ -37,6 +37,9 @@ set SYN_FILES [list \
     "rtl/ludp_tx_scheduler.sv" \
     "rtl/lib_axi/taxi_axi_if.sv" \
     "rtl/lib_axi/taxi_axi_ram.sv" \
+    "rtl/lib_dma/axi_dma_wr.v" \
+    "rtl/lib_dma/axi_dma_rd.v" \
+    "rtl/lib_dma/ludp_dma_wrapper.sv" \
     "rtl/icmp_echo_reply.sv" \
     "rtl/taxi_axis_if.sv" \
     "rtl/taxi_axis_arb_mux.sv" \

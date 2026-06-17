@@ -5,8 +5,9 @@ module ludp_tx_dma_axi #(
     parameter int MEM_ADDR_W        = 32,
     parameter int MEM_SLOT_SIZE     = 16384,
     parameter int AXI_DATA_WIDTH    = 512,
-    parameter int AXI_KEEP_WIDTH    = AXI_DATA_WIDTH / 8,
-    parameter int AXI_MAX_BURST_LEN = 256
+    parameter int AXI_KEEP_WIDTH   = AXI_DATA_WIDTH / 8,
+    parameter int RATIO             = AXI_DATA_WIDTH / DATA_WIDTH,
+    parameter int RATIO_W          = $clog2(RATIO)
 )(
     input  wire        clk,
     input  wire        rst,
@@ -37,105 +38,50 @@ module ludp_tx_dma_axi #(
     input  wire [15:0]           rd_desc_total_beats,
     output logic                 rd_busy,
 
-    // AXI4 Write Master
-    output logic [3:0]           m_axi_awid,
-    output logic [31:0]         m_axi_awaddr,
-    output logic [7:0]          m_axi_awlen,
-    output logic [2:0]          m_axi_awsize,
-    output logic [1:0]          m_axi_awburst,
-    output logic                m_axi_awlock,
-    output logic [3:0]          m_axi_awcache,
-    output logic [2:0]          m_axi_awprot,
-    output logic [3:0]          m_axi_awqos,
-    output logic                m_axi_awvalid,
-    input  logic                m_axi_awready,
-    output logic [511:0]        m_axi_wdata,
-    output logic [63:0]         m_axi_wstrb,
-    output logic                m_axi_wlast,
-    output logic                m_axi_wvalid,
-    input  logic                m_axi_wready,
-    input  logic [3:0]          m_axi_bid,
-    input  logic [1:0]          m_axi_bresp,
-    input  logic                m_axi_bvalid,
-    output logic                m_axi_bready,
+    output logic [MEM_ADDR_W-1:0] dma_wr_desc_addr,
+    output logic [15:0]           dma_wr_desc_len,
+    output logic                  dma_wr_desc_valid,
+    input  wire                   dma_wr_desc_ready,
 
-    // AXI4 Read Master
-    output logic [3:0]           m_axi_arid,
-    output logic [31:0]         m_axi_araddr,
-    output logic [7:0]          m_axi_arlen,
-    output logic [2:0]          m_axi_arsize,
-    output logic [1:0]          m_axi_arburst,
-    output logic                m_axi_arlock,
-    output logic [3:0]          m_axi_arcache,
-    output logic [2:0]          m_axi_arprot,
-    output logic [3:0]          m_axi_arqos,
-    output logic                m_axi_arvalid,
-    input  logic                m_axi_arready,
-    input  logic [3:0]          m_axi_rid,
-    input  logic [511:0]        m_axi_rdata,
-    input  logic [1:0]          m_axi_rresp,
-    input  logic                m_axi_rlast,
-    input  logic                m_axi_rvalid,
-    output logic                m_axi_rready
+    output logic [AXI_DATA_WIDTH-1:0] dma_wr_axis_tdata,
+    output logic [AXI_KEEP_WIDTH-1:0] dma_wr_axis_tkeep,
+    output logic                      dma_wr_axis_tvalid,
+    input  wire                       dma_wr_axis_tready,
+    output logic                      dma_wr_axis_tlast,
+
+    output logic [MEM_ADDR_W-1:0] dma_rd_desc_addr,
+    output logic [15:0]           dma_rd_desc_len,
+    output logic                  dma_rd_desc_valid,
+    input  wire                   dma_rd_desc_ready,
+
+    input  wire [AXI_DATA_WIDTH-1:0] dma_rd_axis_tdata,
+    input  wire [AXI_KEEP_WIDTH-1:0] dma_rd_axis_tkeep,
+    input  wire                      dma_rd_axis_tvalid,
+    output logic                     dma_rd_axis_tready,
+    input  wire                      dma_rd_axis_tlast
 );
 
-    localparam int RATIO        = AXI_DATA_WIDTH / DATA_WIDTH;
-    localparam int RATIO_W      = $clog2(RATIO);
-    localparam int MAX_BEATS    = (MAX_PAYLOAD_BYTES + KEEP_WIDTH - 1) / KEEP_WIDTH;
-    localparam int AXI_BEAT_W   = $clog2(AXI_KEEP_WIDTH);
-    localparam int BURST_LEN_W  = $clog2(AXI_MAX_BURST_LEN + 1);
+    localparam int MAX_BEATS = (MAX_PAYLOAD_BYTES + KEEP_WIDTH - 1) / KEEP_WIDTH;
 
     // ============================================================
-    // WRITE PATH: 64-bit AXI-Stream -> Pack -> 512-bit AXI4
+    // WRITE PATH: 64-bit AXI-Stream -> Pack -> 512-bit AXI-Stream
     // ============================================================
-    typedef enum logic [2:0] {
+    typedef enum logic [1:0] {
         WR_IDLE,
         WR_PACK,
-        WR_AW,
-        WR_DATA,
-        WR_B,
-        WR_RESP
+        WR_FINISH
     } wr_state_t;
 
     wr_state_t wr_state_reg;
     logic [MEM_ADDR_W-1:0]      wr_addr_reg;
     logic [15:0]                wr_axis_beats_sent_reg;
     logic [15:0]                wr_axis_total_beats_reg;
-    logic [BURST_LEN_W-1:0]    wr_burst_count_reg;
-    logic [BURST_LEN_W-1:0]    wr_cur_burst_len_reg;
     logic [RATIO_W-1:0]        wr_pack_idx_reg;
     logic [AXI_DATA_WIDTH-1:0]  wr_pack_data_reg;
     logic [AXI_KEEP_WIDTH-1:0]  wr_pack_strb_reg;
     logic                       wr_pack_last_reg;
 
-    wire [15:0] wr_axis_beats_remaining = wr_axis_total_beats_reg - wr_axis_beats_sent_reg;
-    wire [15:0] wr_axi_beats_remaining  = (wr_axis_beats_remaining + RATIO - 1) / RATIO;
-
-    wire [MEM_ADDR_W-1:0] wr_4k_boundary = {wr_addr_reg[MEM_ADDR_W-1:12], 12'b0} + 32'h1000;
-    wire [MEM_ADDR_W-1:0] wr_beats_to_boundary = (wr_4k_boundary - wr_addr_reg) >> AXI_BEAT_W;
-
-    logic [7:0] wr_awlen_calc;
-
-    always_comb begin
-        if (wr_axi_beats_remaining == '0) begin
-            wr_awlen_calc = 8'h00;
-        end else if (wr_axi_beats_remaining >= AXI_MAX_BURST_LEN) begin
-            if (wr_beats_to_boundary >= AXI_MAX_BURST_LEN)
-                wr_awlen_calc = 8'(AXI_MAX_BURST_LEN - 1);
-            else
-                wr_awlen_calc = 8'(wr_beats_to_boundary - 1);
-        end else begin
-            if (wr_beats_to_boundary >= wr_axi_beats_remaining)
-                wr_awlen_calc = 8'(wr_axi_beats_remaining - 1);
-            else
-                wr_awlen_calc = 8'(wr_beats_to_boundary - 1);
-        end
-    end
-
-    wire [BURST_LEN_W-1:0] wr_burst_len = BURST_LEN_W'(wr_awlen_calc + 1);
-
     wire wr_pack_full  = (wr_pack_idx_reg == RATIO_W'(RATIO - 1));
-    wire wr_pack_flush = wr_axis_tlast && wr_axis_tvalid && wr_axis_tready;
 
     assign wr_axis_tready = (wr_state_reg == WR_PACK);
 
@@ -145,7 +91,6 @@ module ludp_tx_dma_axi #(
             wr_addr_reg            <= '0;
             wr_axis_beats_sent_reg <= '0;
             wr_axis_total_beats_reg<= '0;
-            wr_burst_count_reg     <= '0;
             wr_pack_idx_reg        <= '0;
             wr_pack_data_reg       <= '0;
             wr_pack_strb_reg       <= '0;
@@ -160,7 +105,6 @@ module ludp_tx_dma_axi #(
                         wr_addr_reg            <= wr_desc_base_addr;
                         wr_axis_beats_sent_reg <= '0;
                         wr_axis_total_beats_reg<= wr_desc_total_beats;
-                        wr_burst_count_reg     <= '0;
                         wr_pack_idx_reg        <= '0;
                         wr_pack_data_reg       <= '0;
                         wr_pack_strb_reg       <= '0;
@@ -186,51 +130,23 @@ module ludp_tx_dma_axi #(
                                 end
                             end
                             wr_pack_idx_reg <= '0;
-                            wr_state_reg    <= WR_AW;
+                            wr_state_reg    <= WR_FINISH;
                         end else begin
                             wr_pack_idx_reg <= wr_pack_idx_reg + 1'b1;
                         end
                     end
                 end
 
-                WR_AW: begin
-                    if (m_axi_awready) begin
-                        wr_burst_count_reg   <= '0;
-                        wr_cur_burst_len_reg <= wr_burst_len;
-                        wr_state_reg         <= WR_DATA;
-                    end
-                end
-
-                WR_DATA: begin
-                    if (m_axi_wready) begin
-                        wr_burst_count_reg <= wr_burst_count_reg + 1'b1;
-                        wr_addr_reg        <= wr_addr_reg + (MEM_ADDR_W'(AXI_KEEP_WIDTH));
-
-                        if (wr_burst_count_reg + 1 >= wr_cur_burst_len_reg) begin
-                            if (wr_pack_last_reg) begin
-                                wr_state_reg <= WR_RESP;
-                            end else begin
-                                wr_state_reg <= WR_B;
-                            end
+                WR_FINISH: begin
+                    if (dma_wr_axis_tready) begin
+                        if (wr_pack_last_reg) begin
+                            wr_done <= 1'b1;
+                            wr_state_reg <= WR_IDLE;
                         end else begin
-                            wr_state_reg <= WR_PACK;
-                            wr_pack_idx_reg  <= '0;
                             wr_pack_data_reg <= '0;
                             wr_pack_strb_reg <= '0;
+                            wr_state_reg <= WR_PACK;
                         end
-                    end
-                end
-
-                WR_B: begin
-                    if (m_axi_bvalid) begin
-                        wr_state_reg <= WR_AW;
-                    end
-                end
-
-                WR_RESP: begin
-                    if (m_axi_bvalid) begin
-                        wr_done      <= 1'b1;
-                        wr_state_reg <= WR_IDLE;
                     end
                 end
 
@@ -239,32 +155,21 @@ module ludp_tx_dma_axi #(
         end
     end
 
-    always_comb begin
-        m_axi_awid     = '0;
-        m_axi_awaddr   = wr_addr_reg;
-        m_axi_awlen    = wr_awlen_calc;
-        m_axi_awsize   = 3'($clog2(AXI_KEEP_WIDTH));
-        m_axi_awburst  = 2'b01;
-        m_axi_awlock   = 1'b0;
-        m_axi_awcache  = 4'b0011;
-        m_axi_awprot   = 3'b010;
-        m_axi_awqos    = 4'd0;
-        m_axi_awvalid  = (wr_state_reg == WR_AW);
+    assign dma_wr_desc_addr  = wr_addr_reg;
+    assign dma_wr_desc_len   = wr_axis_total_beats_reg * KEEP_WIDTH;
+    assign dma_wr_desc_valid = (wr_state_reg == WR_IDLE) && wr_desc_enable && wr_axis_tvalid;
 
-        m_axi_wdata  = wr_pack_data_reg;
-        m_axi_wstrb  = wr_pack_strb_reg;
-        m_axi_wlast  = (wr_burst_count_reg + 1 >= wr_cur_burst_len_reg);
-        m_axi_wvalid = (wr_state_reg == WR_DATA);
-
-        m_axi_bready = (wr_state_reg == WR_RESP) || (wr_state_reg == WR_B);
-    end
+    assign dma_wr_axis_tdata  = wr_pack_data_reg;
+    assign dma_wr_axis_tkeep  = wr_pack_strb_reg;
+    assign dma_wr_axis_tvalid = (wr_state_reg == WR_FINISH);
+    assign dma_wr_axis_tlast  = (wr_state_reg == WR_FINISH) && wr_pack_last_reg;
 
     // ============================================================
-    // READ PATH: 512-bit AXI4 -> Unpack -> 64-bit AXI-Stream
+    // READ PATH: 512-bit AXI-Stream -> Unpack -> 64-bit AXI-Stream
     // ============================================================
     typedef enum logic [1:0] {
         RD_IDLE,
-        RD_AR,
+        RD_DESC,
         RD_DATA
     } rd_state_t;
 
@@ -272,7 +177,6 @@ module ludp_tx_dma_axi #(
     logic [MEM_ADDR_W-1:0]      rd_addr_reg;
     logic [15:0]                rd_axis_total_beats_reg;
     logic [15:0]                rd_axis_beat_count_reg;
-    logic [15:0]                rd_axi_burst_remaining_reg;
     logic                       rd_clear_pending_reg;
 
     logic [AXI_DATA_WIDTH-1:0]  rd_unpack_data_reg;
@@ -280,29 +184,6 @@ module ludp_tx_dma_axi #(
     logic [RATIO_W-1:0]         rd_unpack_idx_reg;
     logic                       rd_unpack_valid_reg;
     logic                       rd_unpack_last_axi_reg;
-
-    logic [7:0] rd_arlen_calc;
-
-    wire [15:0] rd_axi_beats_remaining = (rd_axi_burst_remaining_reg + RATIO - 1) / RATIO;
-
-    wire [MEM_ADDR_W-1:0] rd_4k_boundary = {rd_addr_reg[MEM_ADDR_W-1:12], 12'b0} + 32'h1000;
-    wire [MEM_ADDR_W-1:0] rd_beats_to_boundary = (rd_4k_boundary - rd_addr_reg) >> AXI_BEAT_W;
-
-    always_comb begin
-        if (rd_axi_burst_remaining_reg == '0) begin
-            rd_arlen_calc = 8'h00;
-        end else if (rd_axi_beats_remaining >= AXI_MAX_BURST_LEN) begin
-            if (rd_beats_to_boundary >= AXI_MAX_BURST_LEN)
-                rd_arlen_calc = 8'(AXI_MAX_BURST_LEN - 1);
-            else
-                rd_arlen_calc = 8'(rd_beats_to_boundary - 1);
-        end else begin
-            if (rd_beats_to_boundary >= rd_axi_beats_remaining)
-                rd_arlen_calc = 8'(rd_axi_beats_remaining - 1);
-            else
-                rd_arlen_calc = 8'(rd_beats_to_boundary - 1);
-        end
-    end
 
     assign rd_busy = (rd_state_reg != RD_IDLE) || rd_unpack_valid_reg;
 
@@ -312,7 +193,6 @@ module ludp_tx_dma_axi #(
             rd_addr_reg             <= '0;
             rd_axis_total_beats_reg <= '0;
             rd_axis_beat_count_reg  <= '0;
-            rd_axi_burst_remaining_reg <= '0;
             rd_done                 <= 1'b0;
             rd_clear_pending_reg    <= 1'b0;
             rd_unpack_data_reg      <= '0;
@@ -343,45 +223,32 @@ module ludp_tx_dma_axi #(
                         rd_addr_reg             <= rd_desc_base_addr;
                         rd_axis_total_beats_reg <= rd_desc_total_beats;
                         rd_axis_beat_count_reg  <= '0;
-                        rd_axi_burst_remaining_reg <= rd_desc_total_beats;
-                        rd_state_reg            <= RD_AR;
                         rd_clear_pending_reg    <= 1'b0;
+                        rd_state_reg            <= RD_DESC;
                     end
                 end
 
-                RD_AR: begin
-                    if (m_axi_arready) begin
+                RD_DESC: begin
+                    if (dma_rd_desc_ready) begin
                         rd_state_reg <= RD_DATA;
                     end
                 end
 
                 RD_DATA: begin
-                    if (m_axi_rvalid && (!rd_unpack_valid_reg || rd_axis_tready)) begin
-                        rd_unpack_data_reg     <= m_axi_rdata;
+                    if (dma_rd_axis_tvalid && (!rd_unpack_valid_reg || rd_axis_tready)) begin
+                        rd_unpack_data_reg     <= dma_rd_axis_tdata;
                         rd_unpack_strb_reg     <= {AXI_KEEP_WIDTH{1'b1}};
                         rd_unpack_valid_reg    <= 1'b1;
                         rd_unpack_idx_reg      <= '0;
-                        rd_unpack_last_axi_reg <= m_axi_rlast;
+                        rd_unpack_last_axi_reg <= dma_rd_axis_tlast;
 
-                        if (RATIO == 1) begin
-                            rd_axi_burst_remaining_reg <= rd_axi_burst_remaining_reg - 1'b1;
-                        end else begin
-                            if (rd_axi_burst_remaining_reg >= RATIO)
-                                rd_axi_burst_remaining_reg <= rd_axi_burst_remaining_reg - RATIO;
-                            else
-                                rd_axi_burst_remaining_reg <= '0;
-                        end
-                        rd_addr_reg <= rd_addr_reg + MEM_ADDR_W'(AXI_KEEP_WIDTH);
-
-                        if (m_axi_rlast) begin
+                        if (dma_rd_axis_tlast) begin
                             if (rd_clear_pending_reg) begin
                                 rd_clear_pending_reg <= 1'b0;
                                 rd_unpack_valid_reg  <= 1'b0;
                                 rd_state_reg <= RD_IDLE;
-                            end else if (rd_axi_burst_remaining_reg <= RATIO) begin
-                                rd_state_reg <= RD_IDLE;
                             end else begin
-                                rd_state_reg <= RD_AR;
+                                rd_state_reg <= RD_IDLE;
                             end
                         end
                     end
@@ -401,20 +268,11 @@ module ludp_tx_dma_axi #(
         end
     end
 
-    always_comb begin
-        m_axi_arid     = '0;
-        m_axi_araddr   = rd_addr_reg;
-        m_axi_arlen    = rd_arlen_calc;
-        m_axi_arsize   = 3'($clog2(AXI_KEEP_WIDTH));
-        m_axi_arburst  = 2'b01;
-        m_axi_arlock   = 1'b0;
-        m_axi_arcache  = 4'b0011;
-        m_axi_arprot   = 3'b010;
-        m_axi_arqos    = 4'd0;
-        m_axi_arvalid  = (rd_state_reg == RD_AR);
+    assign dma_rd_desc_addr  = rd_desc_base_addr;
+    assign dma_rd_desc_len   = rd_desc_total_beats * KEEP_WIDTH;
+    assign dma_rd_desc_valid = (rd_state_reg == RD_DESC);
 
-        m_axi_rready = (rd_state_reg == RD_DATA) && (!rd_unpack_valid_reg || rd_axis_tready);
-    end
+    assign dma_rd_axis_tready = (rd_state_reg == RD_DATA) && (!rd_unpack_valid_reg || rd_axis_tready);
 
     assign rd_axis_tdata  = rd_unpack_valid_reg ?
                             rd_unpack_data_reg[rd_unpack_idx_reg * DATA_WIDTH +: DATA_WIDTH] : '0;
