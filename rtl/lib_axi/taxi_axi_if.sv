@@ -9,41 +9,24 @@ Authors:
 */
 
 interface taxi_axi_if #(
-    // Width of data bus in bits
     parameter DATA_W = 32,
-    // Width of address bus in bits
     parameter ADDR_W = 32,
-    // Width of wstrb (width of data bus in words)
     parameter STRB_W = (DATA_W/8),
-    // Width of ID signal
     parameter ID_W = 8,
-    // Use awuser signal
     parameter logic AWUSER_EN = 1'b0,
-    // Width of awuser signal
     parameter AWUSER_W = 1,
-    // Use wuser signal
     parameter logic WUSER_EN = 1'b0,
-    // Width of wuser signal
     parameter WUSER_W = 1,
-    // Use buser signal
     parameter logic BUSER_EN = 1'b0,
-    // Width of buser signal
     parameter BUSER_W = 1,
-    // Use aruser signal
     parameter logic ARUSER_EN = 1'b0,
-    // Width of aruser signal
     parameter ARUSER_W = 1,
-    // Use ruser signal
     parameter logic RUSER_EN = 1'b0,
-    // Width of ruser signal
     parameter RUSER_W = 1,
-    // Maximum AXI burst length supported
     parameter MAX_BURST_LEN = 256,
-    // Narrow bursts are supported
     parameter logic NARROW_BURST_EN = 1'b1
 )
 ();
-    // AW
     logic [ID_W-1:0]      awid;
     logic [ADDR_W-1:0]    awaddr;
     logic [7:0]           awlen;
@@ -57,20 +40,17 @@ interface taxi_axi_if #(
     logic [AWUSER_W-1:0]  awuser;
     logic                 awvalid;
     logic                 awready;
-    // W
     logic [DATA_W-1:0]    wdata;
     logic [STRB_W-1:0]    wstrb;
     logic                 wlast;
     logic [WUSER_W-1:0]   wuser;
     logic                 wvalid;
     logic                 wready;
-    // B
     logic [ID_W-1:0]      bid;
     logic [1:0]           bresp;
     logic [BUSER_W-1:0]   buser;
     logic                 bvalid;
     logic                 bready;
-    // AR
     logic [ID_W-1:0]      arid;
     logic [ADDR_W-1:0]    araddr;
     logic [7:0]           arlen;
@@ -84,7 +64,6 @@ interface taxi_axi_if #(
     logic [ARUSER_W-1:0]  aruser;
     logic                 arvalid;
     logic                 arready;
-    // R
     logic [ID_W-1:0]      rid;
     logic [DATA_W-1:0]    rdata;
     logic [1:0]           rresp;
@@ -94,7 +73,6 @@ interface taxi_axi_if #(
     logic                 rready;
 
     modport wr_mst (
-        // AW
         output awid,
         output awaddr,
         output awlen,
@@ -108,14 +86,12 @@ interface taxi_axi_if #(
         output awuser,
         output awvalid,
         input  awready,
-        // W
         output wdata,
         output wstrb,
         output wlast,
         output wuser,
         output wvalid,
         input  wready,
-        // B
         input  bid,
         input  bresp,
         input  buser,
@@ -124,7 +100,6 @@ interface taxi_axi_if #(
     );
 
     modport rd_mst (
-        // AR
         output arid,
         output araddr,
         output arlen,
@@ -138,7 +113,6 @@ interface taxi_axi_if #(
         output aruser,
         output arvalid,
         input  arready,
-        // R
         input  rid,
         input  rdata,
         input  rresp,
@@ -149,7 +123,6 @@ interface taxi_axi_if #(
     );
 
     modport wr_slv (
-        // AW
         input  awid,
         input  awaddr,
         input  awlen,
@@ -163,14 +136,12 @@ interface taxi_axi_if #(
         input  awuser,
         input  awvalid,
         output awready,
-        // W
         input  wdata,
         input  wstrb,
         input  wlast,
         input  wuser,
         input  wvalid,
         output wready,
-        // B
         output bid,
         output bresp,
         output buser,
@@ -179,7 +150,6 @@ interface taxi_axi_if #(
     );
 
     modport rd_slv (
-        // AR
         input  arid,
         input  araddr,
         input  arlen,
@@ -193,7 +163,6 @@ interface taxi_axi_if #(
         input  aruser,
         input  arvalid,
         output arready,
-        // R
         output rid,
         output rdata,
         output rresp,
@@ -204,7 +173,6 @@ interface taxi_axi_if #(
     );
 
     modport wr_mon (
-        // AW
         input  awid,
         input  awaddr,
         input  awlen,
@@ -218,14 +186,12 @@ interface taxi_axi_if #(
         input  awuser,
         input  awvalid,
         input  awready,
-        // W
         input  wdata,
         input  wstrb,
         input  wlast,
         input  wuser,
         input  wvalid,
         input  wready,
-        // B
         input  bid,
         input  bresp,
         input  buser,
@@ -234,7 +200,6 @@ interface taxi_axi_if #(
     );
 
     modport rd_mon (
-        // AR
         input  arid,
         input  araddr,
         input  arlen,
@@ -248,7 +213,6 @@ interface taxi_axi_if #(
         input  aruser,
         input  arvalid,
         input  arready,
-        // R
         input  rid,
         input  rdata,
         input  rresp,

@@ -84,6 +84,7 @@ VCS_BASE_FLAGS = -full64 -sverilog -timescale=1ns/1ps \
     -ignore initializer_driver_checks \
     -ntb_opts uvm-1.2 \
     -CFLAGS "-DVCS" \
+    +define+SIMULATION \
     -f filelist.f \
     -top $(TB_TOP) \
     -o simv \

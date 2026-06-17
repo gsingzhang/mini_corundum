@@ -24,7 +24,7 @@ puts "mini_corundum    : $mini_corundum_root"
 # Files for synthesis (relative to mini_corundum_root)
 set SYN_FILES [list \
     "rtl/fpga.v" \
-    "rtl/fpga_core.v" \
+    "rtl/fpga_core.sv" \
     "rtl/eth_xcvr_phy_wrapper.v" \
     "rtl/eth_xcvr_phy_quad_wrapper.v" \
     "rtl/debounce_switch.v" \
@@ -33,6 +33,10 @@ set SYN_FILES [list \
     "rtl/ludp_protocol_rx.sv" \
     "rtl/ludp_protocol_tx.sv" \
     "rtl/ludp_tx_buffer.sv" \
+    "rtl/ludp_tx_dma_axi.sv" \
+    "rtl/ludp_tx_scheduler.sv" \
+    "rtl/lib_axi/taxi_axi_if.sv" \
+    "rtl/lib_axi/taxi_axi_ram.sv" \
     "rtl/icmp_echo_reply.sv" \
     "rtl/taxi_axis_if.sv" \
     "rtl/taxi_axis_arb_mux.sv" \
@@ -89,9 +93,11 @@ set XDC_FILES [list \
 # IP TCL files (relative to mini_corundum_root)
 set IP_TCL_FILES [list \
     "ip/eth_xcvr_gt.tcl" \
+    "ip/ddr4_0.tcl" \
 ]
 
 # Other TCL constraint files (relative to script/FPGA directory)
+# These require an open design, so they should be sourced after synthesis
 set CONSTRAINT_TCL_FILES [list \
     "syn/eth_mac_fifo.tcl" \
     "syn/axis_async_fifo.tcl" \
@@ -147,16 +153,6 @@ foreach file $IP_TCL_FILES {
     set abs_path [get_abs_path $file]
     if {![file exists $abs_path]} {
         puts "WARNING: IP TCL file not found: $abs_path — skipping"
-        continue
-    }
-    source $abs_path
-}
-
-# Source constraint TCL files
-foreach file $CONSTRAINT_TCL_FILES {
-    set abs_path [file normalize [file join $initial_dir $file]]
-    if {![file exists $abs_path]} {
-        puts "WARNING: Constraint TCL file not found: $abs_path — skipping"
         continue
     }
     source $abs_path

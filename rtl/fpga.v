@@ -74,6 +74,29 @@ module fpga (
     input  wire       sfp_mgt_refclk_0_n,
     output wire       sfp0_tx_disable_b,
     output wire       sfp1_tx_disable_b
+
+`ifndef SIMULATION
+    ,
+    /*
+     * DDR4 SDRAM (ZCU106 PL-side)
+     */
+    input  wire        ddr4_sys_clk_p,
+    input  wire        ddr4_sys_clk_n,
+    output wire [16:0] ddr4_adr,
+    output wire [1:0]  ddr4_ba,
+    output wire        ddr4_cke,
+    output wire        ddr4_cs_n,
+    inout  wire [7:0]  ddr4_dm_dbi_n,
+    inout  wire [63:0] ddr4_dq,
+    inout  wire [7:0]  ddr4_dqs_c,
+    inout  wire [7:0]  ddr4_dqs_t,
+    output wire        ddr4_odt,
+    output wire        ddr4_bg,
+    output wire        ddr4_reset_n,
+    output wire        ddr4_act_n,
+    output wire [0:0]  ddr4_ck_c,
+    output wire [0:0]  ddr4_ck_t
+`endif
 );
 
 // Clock and reset
@@ -364,6 +387,26 @@ core_inst (
     .sfp1_rx_rst(sfp1_rx_rst_int),
     .sfp1_rxd(sfp1_rxd_int),
     .sfp1_rxc(sfp1_rxc_int)
+
+`ifndef SIMULATION
+    ,
+    .ddr4_sys_clk_p(ddr4_sys_clk_p),
+    .ddr4_sys_clk_n(ddr4_sys_clk_n),
+    .ddr4_adr(ddr4_adr),
+    .ddr4_ba(ddr4_ba),
+    .ddr4_cke(ddr4_cke),
+    .ddr4_cs_n(ddr4_cs_n),
+    .ddr4_dm_dbi_n(ddr4_dm_dbi_n),
+    .ddr4_dq(ddr4_dq),
+    .ddr4_dqs_c(ddr4_dqs_c),
+    .ddr4_dqs_t(ddr4_dqs_t),
+    .ddr4_odt(ddr4_odt),
+    .ddr4_bg(ddr4_bg),
+    .ddr4_reset_n(ddr4_reset_n),
+    .ddr4_act_n(ddr4_act_n),
+    .ddr4_ck_c(ddr4_ck_c),
+    .ddr4_ck_t(ddr4_ck_t)
+`endif
 );
 
 endmodule

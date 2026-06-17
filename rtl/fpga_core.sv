@@ -78,6 +78,30 @@ module fpga_core
     input  wire        sfp1_rx_rst,
     input  wire [63:0] sfp1_rxd,
     input  wire [7:0]  sfp1_rxc
+
+`ifndef SIMULATION
+    ,
+    /*
+     * DDR4 SDRAM (ZCU106 PL-side)
+     */
+    input  wire        ddr4_sys_clk_p,
+    input  wire        ddr4_sys_clk_n,
+    output wire [16:0] ddr4_adr,
+    output wire [1:0]  ddr4_ba,
+    output wire        ddr4_cke,
+    output wire        ddr4_cs_n,
+    inout  wire [7:0]  ddr4_dm_dbi_n,
+    inout  wire [63:0] ddr4_dq,
+    inout  wire [7:0]  ddr4_dqs_c,
+    inout  wire [7:0]  ddr4_dqs_t,
+    output wire        ddr4_odt,
+    output wire        ddr4_bg,
+    output wire        ddr4_reset_n,
+    output wire     
+       ddr4_act_n,
+    output wire [0:0]  ddr4_ck_c,
+    output wire [0:0]  ddr4_ck_t
+`endif
 );
 
 // AXI between MAC and Ethernet modules
@@ -387,19 +411,52 @@ assign ludp_dma_axis_tuser  = ludp_tx_fifo_axis_tuser;
 assign ludp_dma_pkt_size    = test_data_payload_size_reg;
 assign ludp_tx_fifo_axis_tready = ludp_dma_axis_tready;
 
-// AXI4 interface for DDR buffer
-taxi_axi_if #(
-    .DATA_W(64),
-    .ADDR_W(32),
-    .ID_W(1)
-) ludp_axi_if_inst ();
+// AXI4 wires for DDR buffer (512-bit to match DDR4 MIG)
+wire [3:0]   ddr4_awid;
+wire [31:0]  ddr4_awaddr_full;
+wire [7:0]   ddr4_awlen;
+wire [2:0]   ddr4_awsize;
+wire [1:0]   ddr4_awburst;
+wire         ddr4_awlock;
+wire [3:0]   ddr4_awcache;
+wire [2:0]   ddr4_awprot;
+wire [3:0]   ddr4_awqos;
+wire         ddr4_awvalid;
+wire         ddr4_awready;
+wire [511:0] ddr4_wdata;
+wire [63:0]  ddr4_wstrb;
+wire         ddr4_wlast;
+wire         ddr4_wvalid;
+wire         ddr4_wready;
+wire [3:0]   ddr4_bid;
+wire [1:0]   ddr4_bresp;
+wire         ddr4_bvalid;
+wire         ddr4_bready;
+wire [3:0]   ddr4_arid;
+wire [31:0]  ddr4_araddr_full;
+wire [7:0]   ddr4_arlen;
+wire [2:0]   ddr4_arsize;
+wire [1:0]   ddr4_arburst;
+wire         ddr4_arlock;
+wire [3:0]   ddr4_arcache;
+wire [2:0]   ddr4_arprot;
+wire [3:0]   ddr4_arqos;
+wire         ddr4_arvalid;
+wire         ddr4_arready;
+wire [3:0]   ddr4_rid;
+wire [511:0] ddr4_rdata;
+wire [1:0]   ddr4_rresp;
+wire         ddr4_rlast;
+wire         ddr4_rvalid;
+wire         ddr4_rready;
 
 // LUDP Protocol Instance
 ludp_protocol #(
     .DATA_WIDTH(64),
     .KEEP_WIDTH(8),
     .NUM_BLOCKS(3),
-    .MEM_SLOT_SIZE(16384)
+    .MEM_SLOT_SIZE(16384),
+    .AXI_DATA_WIDTH(512)
 )
 ludp_protocol_inst (
     .clk(clk),
@@ -474,8 +531,43 @@ ludp_protocol_inst (
     .cmd_count(ludp_cmd_count),
     .last_payload_size(ludp_last_payload_size),
 
-    .m_axi_wr(ludp_axi_if_inst.wr_mst),
-    .m_axi_rd(ludp_axi_if_inst.rd_mst)
+    .m_axi_awid(ddr4_awid),
+    .m_axi_awaddr(ddr4_awaddr_full),
+    .m_axi_awlen(ddr4_awlen),
+    .m_axi_awsize(ddr4_awsize),
+    .m_axi_awburst(ddr4_awburst),
+    .m_axi_awlock(ddr4_awlock),
+    .m_axi_awcache(ddr4_awcache),
+    .m_axi_awprot(ddr4_awprot),
+    .m_axi_awqos(ddr4_awqos),
+    .m_axi_awvalid(ddr4_awvalid),
+    .m_axi_awready(ddr4_awready),
+    .m_axi_wdata(ddr4_wdata),
+    .m_axi_wstrb(ddr4_wstrb),
+    .m_axi_wlast(ddr4_wlast),
+    .m_axi_wvalid(ddr4_wvalid),
+    .m_axi_wready(ddr4_wready),
+    .m_axi_bid(ddr4_bid),
+    .m_axi_bresp(ddr4_bresp),
+    .m_axi_bvalid(ddr4_bvalid),
+    .m_axi_bready(ddr4_bready),
+    .m_axi_arid(ddr4_arid),
+    .m_axi_araddr(ddr4_araddr_full),
+    .m_axi_arlen(ddr4_arlen),
+    .m_axi_arsize(ddr4_arsize),
+    .m_axi_arburst(ddr4_arburst),
+    .m_axi_arlock(ddr4_arlock),
+    .m_axi_arcache(ddr4_arcache),
+    .m_axi_arprot(ddr4_arprot),
+    .m_axi_arqos(ddr4_arqos),
+    .m_axi_arvalid(ddr4_arvalid),
+    .m_axi_arready(ddr4_arready),
+    .m_axi_rid(ddr4_rid),
+    .m_axi_rdata(ddr4_rdata),
+    .m_axi_rresp(ddr4_rresp),
+    .m_axi_rlast(ddr4_rlast),
+    .m_axi_rvalid(ddr4_rvalid),
+    .m_axi_rready(ddr4_rready)
 );
 
 assign ludp_status_opcode = 16'h0;
@@ -483,14 +575,145 @@ assign ludp_status_data  = {f2h_tx_enabled_dly, 31'h0};
 assign ludp_status_valid = 1'b0;
 assign ludp_cmd_ready    = 1'b1;
 
+`ifdef SIMULATION
+taxi_axi_if #(
+    .DATA_W(512),
+    .ADDR_W(32),
+    .ID_W(4)
+) ludp_sim_axi_if_inst ();
+
 taxi_axi_ram #(
     .ADDR_W(20)
 ) ludp_axi_ram_inst (
     .clk(clk),
     .rst(rst),
-    .s_axi_wr(ludp_axi_if_inst.wr_slv),
-    .s_axi_rd(ludp_axi_if_inst.rd_slv)
+    .s_axi_wr(ludp_sim_axi_if_inst.wr_slv),
+    .s_axi_rd(ludp_sim_axi_if_inst.rd_slv)
 );
+
+assign ludp_sim_axi_if_inst.awid    = ddr4_awid;
+assign ludp_sim_axi_if_inst.awaddr  = ddr4_awaddr_full;
+assign ludp_sim_axi_if_inst.awlen   = ddr4_awlen;
+assign ludp_sim_axi_if_inst.awsize  = ddr4_awsize;
+assign ludp_sim_axi_if_inst.awburst = ddr4_awburst;
+assign ludp_sim_axi_if_inst.awlock  = ddr4_awlock;
+assign ludp_sim_axi_if_inst.awcache = ddr4_awcache;
+assign ludp_sim_axi_if_inst.awprot  = ddr4_awprot;
+assign ludp_sim_axi_if_inst.awqos   = ddr4_awqos;
+assign ludp_sim_axi_if_inst.awvalid = ddr4_awvalid;
+assign ddr4_awready = ludp_sim_axi_if_inst.awready;
+assign ludp_sim_axi_if_inst.wdata   = ddr4_wdata;
+assign ludp_sim_axi_if_inst.wstrb   = ddr4_wstrb;
+assign ludp_sim_axi_if_inst.wlast   = ddr4_wlast;
+assign ludp_sim_axi_if_inst.wvalid  = ddr4_wvalid;
+assign ddr4_wready = ludp_sim_axi_if_inst.wready;
+assign ludp_sim_axi_if_inst.bready  = ddr4_bready;
+assign ddr4_bid    = ludp_sim_axi_if_inst.bid;
+assign ddr4_bresp = ludp_sim_axi_if_inst.bresp;
+assign ddr4_bvalid= ludp_sim_axi_if_inst.bvalid;
+assign ludp_sim_axi_if_inst.arid    = ddr4_arid;
+assign ludp_sim_axi_if_inst.araddr  = ddr4_araddr_full;
+assign ludp_sim_axi_if_inst.arlen   = ddr4_arlen;
+assign ludp_sim_axi_if_inst.arsize  = ddr4_arsize;
+assign ludp_sim_axi_if_inst.arburst = ddr4_arburst;
+assign ludp_sim_axi_if_inst.arlock  = ddr4_arlock;
+assign ludp_sim_axi_if_inst.arcache= ddr4_arcache;
+assign ludp_sim_axi_if_inst.arprot  = ddr4_arprot;
+assign ludp_sim_axi_if_inst.arqos   = ddr4_arqos;
+assign ludp_sim_axi_if_inst.arvalid = ddr4_arvalid;
+assign ddr4_arready = ludp_sim_axi_if_inst.arready;
+assign ddr4_rready = ludp_sim_axi_if_inst.rready;
+assign ddr4_rid    = ludp_sim_axi_if_inst.rid;
+assign ddr4_rdata  = ludp_sim_axi_if_inst.rdata;
+assign ddr4_rresp  = ludp_sim_axi_if_inst.rresp;
+assign ddr4_rlast  = ludp_sim_axi_if_inst.rlast;
+assign ddr4_rvalid = ludp_sim_axi_if_inst.rvalid;
+`else
+// DDR4 MIG reset logic
+reg ddr4_rst_reg = 1'b1;
+always @(posedge clk or posedge rst) begin
+    if (rst)
+        ddr4_rst_reg <= 1'b1;
+    else
+        ddr4_rst_reg <= 1'b0;
+end
+
+// DDR4 MIG instance
+wire        ddr4_ui_clk;
+wire        ddr4_ui_rst;
+wire        ddr4_init_calib_complete;
+
+ddr4_0 ddr4_inst (
+    .c0_sys_clk_p           (ddr4_sys_clk_p),
+    .c0_sys_clk_n           (ddr4_sys_clk_n),
+    .sys_rst                (ddr4_rst_reg),
+
+    .c0_ddr4_ui_clk         (ddr4_ui_clk),
+    .c0_ddr4_ui_clk_sync_rst(ddr4_ui_rst),
+    .c0_init_calib_complete  (ddr4_init_calib_complete),
+    .c0_ddr4_aresetn        (),
+
+    .c0_ddr4_s_axi_awid     (ddr4_awid),
+    .c0_ddr4_s_axi_awaddr   (ddr4_awaddr_full[30:0]),
+    .c0_ddr4_s_axi_awlen    (ddr4_awlen),
+    .c0_ddr4_s_axi_awsize   (ddr4_awsize),
+    .c0_ddr4_s_axi_awburst  (ddr4_awburst),
+    .c0_ddr4_s_axi_awlock   (ddr4_awlock),
+    .c0_ddr4_s_axi_awcache  (ddr4_awcache),
+    .c0_ddr4_s_axi_awprot   (ddr4_awprot),
+    .c0_ddr4_s_axi_awqos    (ddr4_awqos),
+    .c0_ddr4_s_axi_awvalid  (ddr4_awvalid),
+    .c0_ddr4_s_axi_awready  (ddr4_awready),
+
+    .c0_ddr4_s_axi_wdata    (ddr4_wdata),
+    .c0_ddr4_s_axi_wstrb    (ddr4_wstrb),
+    .c0_ddr4_s_axi_wlast    (ddr4_wlast),
+    .c0_ddr4_s_axi_wvalid   (ddr4_wvalid),
+    .c0_ddr4_s_axi_wready   (ddr4_wready),
+
+    .c0_ddr4_s_axi_bready   (ddr4_bready),
+    .c0_ddr4_s_axi_bid      (ddr4_bid),
+    .c0_ddr4_s_axi_bresp    (ddr4_bresp),
+    .c0_ddr4_s_axi_bvalid   (ddr4_bvalid),
+
+    .c0_ddr4_s_axi_arid     (ddr4_arid),
+    .c0_ddr4_s_axi_araddr   (ddr4_araddr_full[30:0]),
+    .c0_ddr4_s_axi_arlen    (ddr4_arlen),
+    .c0_ddr4_s_axi_arsize   (ddr4_arsize),
+    .c0_ddr4_s_axi_arburst  (ddr4_arburst),
+    .c0_ddr4_s_axi_arlock   (ddr4_arlock),
+    .c0_ddr4_s_axi_arcache  (ddr4_arcache),
+    .c0_ddr4_s_axi_arprot   (ddr4_arprot),
+    .c0_ddr4_s_axi_arqos    (ddr4_arqos),
+    .c0_ddr4_s_axi_arvalid  (ddr4_arvalid),
+    .c0_ddr4_s_axi_arready  (ddr4_arready),
+
+    .c0_ddr4_s_axi_rready   (ddr4_rready),
+    .c0_ddr4_s_axi_rid      (ddr4_rid),
+    .c0_ddr4_s_axi_rdata    (ddr4_rdata),
+    .c0_ddr4_s_axi_rresp    (ddr4_rresp),
+    .c0_ddr4_s_axi_rlast    (ddr4_rlast),
+    .c0_ddr4_s_axi_rvalid   (ddr4_rvalid),
+
+    .c0_ddr4_adr            (ddr4_adr),
+    .c0_ddr4_ba             (ddr4_ba),
+    .c0_ddr4_cke            (ddr4_cke),
+    .c0_ddr4_cs_n           (ddr4_cs_n),
+    .c0_ddr4_dm_dbi_n       (ddr4_dm_dbi_n),
+    .c0_ddr4_dq             (ddr4_dq),
+    .c0_ddr4_dqs_c          (ddr4_dqs_c),
+    .c0_ddr4_dqs_t          (ddr4_dqs_t),
+    .c0_ddr4_odt            (ddr4_odt),
+    .c0_ddr4_bg             (ddr4_bg),
+    .c0_ddr4_reset_n        (ddr4_reset_n),
+    .c0_ddr4_act_n          (ddr4_act_n),
+    .c0_ddr4_ck_c           (ddr4_ck_c),
+    .c0_ddr4_ck_t           (ddr4_ck_t),
+
+    .dbg_clk                (),
+    .dbg_bus                ()
+);
+`endif
 
 // LED output: show burst status and command count
 reg [7:0] led_reg = 0;

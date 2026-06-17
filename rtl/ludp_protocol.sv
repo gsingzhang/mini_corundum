@@ -3,7 +3,8 @@ module ludp_protocol #(
     parameter int KEEP_WIDTH        = 8,
     parameter int MAX_PAYLOAD_BYTES = 9000,
     parameter int NUM_BLOCKS        = 3,
-    parameter int MEM_SLOT_SIZE     = 16384
+    parameter int MEM_SLOT_SIZE     = 16384,
+    parameter int AXI_DATA_WIDTH    = 512
 )(
     input  wire        clk,
     input  wire        rst,
@@ -79,8 +80,46 @@ module ludp_protocol #(
     output logic [31:0] cmd_count,
     output logic [15:0] last_payload_size,
 
-    taxi_axi_if.wr_mst           m_axi_wr,
-    taxi_axi_if.rd_mst           m_axi_rd
+    // AXI4 Write Master
+    output logic [3:0]           m_axi_awid,
+    output logic [31:0]         m_axi_awaddr,
+    output logic [7:0]          m_axi_awlen,
+    output logic [2:0]          m_axi_awsize,
+    output logic [1:0]          m_axi_awburst,
+    output logic                m_axi_awlock,
+    output logic [3:0]          m_axi_awcache,
+    output logic [2:0]          m_axi_awprot,
+    output logic [3:0]          m_axi_awqos,
+    output logic                m_axi_awvalid,
+    input  logic                m_axi_awready,
+    output logic [511:0]        m_axi_wdata,
+    output logic [63:0]         m_axi_wstrb,
+    output logic                m_axi_wlast,
+    output logic                m_axi_wvalid,
+    input  logic                m_axi_wready,
+    input  logic [3:0]          m_axi_bid,
+    input  logic [1:0]          m_axi_bresp,
+    input  logic                m_axi_bvalid,
+    output logic                m_axi_bready,
+
+    // AXI4 Read Master
+    output logic [3:0]           m_axi_arid,
+    output logic [31:0]         m_axi_araddr,
+    output logic [7:0]          m_axi_arlen,
+    output logic [2:0]          m_axi_arsize,
+    output logic [1:0]          m_axi_arburst,
+    output logic                m_axi_arlock,
+    output logic [3:0]          m_axi_arcache,
+    output logic [2:0]          m_axi_arprot,
+    output logic [3:0]          m_axi_arqos,
+    output logic                m_axi_arvalid,
+    input  logic                m_axi_arready,
+    input  logic [3:0]          m_axi_rid,
+    input  logic [511:0]        m_axi_rdata,
+    input  logic [1:0]          m_axi_rresp,
+    input  logic                m_axi_rlast,
+    input  logic                m_axi_rvalid,
+    output logic                m_axi_rready
 );
 
     logic [31:0] seq_num_reg;
@@ -265,7 +304,8 @@ module ludp_protocol #(
         .KEEP_WIDTH(KEEP_WIDTH),
         .MAX_PAYLOAD_BYTES(MAX_PAYLOAD_BYTES),
         .MEM_ADDR_W(32),
-        .MEM_SLOT_SIZE(MEM_SLOT_SIZE)
+        .MEM_SLOT_SIZE(MEM_SLOT_SIZE),
+        .AXI_DATA_WIDTH(AXI_DATA_WIDTH)
     ) dma_inst (
         .clk(clk),
         .rst(rst),
@@ -296,8 +336,43 @@ module ludp_protocol #(
         .rd_axis_tuser (dma_rd_axis_tuser),
         .rd_done  (dma_rd_done),
 
-        .m_axi_wr(m_axi_wr),
-        .m_axi_rd(m_axi_rd)
+        .m_axi_awid(m_axi_awid),
+        .m_axi_awaddr(m_axi_awaddr),
+        .m_axi_awlen(m_axi_awlen),
+        .m_axi_awsize(m_axi_awsize),
+        .m_axi_awburst(m_axi_awburst),
+        .m_axi_awlock(m_axi_awlock),
+        .m_axi_awcache(m_axi_awcache),
+        .m_axi_awprot(m_axi_awprot),
+        .m_axi_awqos(m_axi_awqos),
+        .m_axi_awvalid(m_axi_awvalid),
+        .m_axi_awready(m_axi_awready),
+        .m_axi_wdata(m_axi_wdata),
+        .m_axi_wstrb(m_axi_wstrb),
+        .m_axi_wlast(m_axi_wlast),
+        .m_axi_wvalid(m_axi_wvalid),
+        .m_axi_wready(m_axi_wready),
+        .m_axi_bid(m_axi_bid),
+        .m_axi_bresp(m_axi_bresp),
+        .m_axi_bvalid(m_axi_bvalid),
+        .m_axi_bready(m_axi_bready),
+        .m_axi_arid(m_axi_arid),
+        .m_axi_araddr(m_axi_araddr),
+        .m_axi_arlen(m_axi_arlen),
+        .m_axi_arsize(m_axi_arsize),
+        .m_axi_arburst(m_axi_arburst),
+        .m_axi_arlock(m_axi_arlock),
+        .m_axi_arcache(m_axi_arcache),
+        .m_axi_arprot(m_axi_arprot),
+        .m_axi_arqos(m_axi_arqos),
+        .m_axi_arvalid(m_axi_arvalid),
+        .m_axi_arready(m_axi_arready),
+        .m_axi_rid(m_axi_rid),
+        .m_axi_rdata(m_axi_rdata),
+        .m_axi_rresp(m_axi_rresp),
+        .m_axi_rlast(m_axi_rlast),
+        .m_axi_rvalid(m_axi_rvalid),
+        .m_axi_rready(m_axi_rready)
     );
 
     ludp_protocol_tx #(
