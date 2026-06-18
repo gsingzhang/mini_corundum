@@ -223,3 +223,9 @@ set_property -dict {LOC AM21 IOSTANDARD DIFF_POD12_DCI } [get_ports {ddr4_dqs_t[
 set_property -dict {LOC AN21 IOSTANDARD DIFF_POD12_DCI } [get_ports {ddr4_dqs_c[7]}]
 set_property -dict {LOC AL20 IOSTANDARD POD12_DCI      } [get_ports {ddr4_dm_dbi_n[6]}]
 set_property -dict {LOC AP19 IOSTANDARD POD12_DCI      } [get_ports {ddr4_dm_dbi_n[7]}]
+
+# Clock domain crossing constraints
+# clk (156.25MHz) and ddr4_ui_clk (300MHz) are asynchronous
+set_clock_groups -asynchronous \
+    -group [get_clocks -include_generated_clocks clk_156mhz_int] \
+    -group [get_clocks -include_generated_clocks c0_ddr4_ui_clk]

@@ -7,10 +7,13 @@ import ludp_tb_pkg::*;
 
 module tb_fpga_core;
 
-localparam CLK_PERIOD = 6.4;
+localparam CLK_PERIOD = 6.4;       // 156.25 MHz logic clock
+localparam M_CLK_PERIOD = 3.333;   // 300 MHz DMA clock (DDR4 UI clock)
 localparam TIMEOUT_CYCLES = 10000000;
 
 reg clk = 0;
+reg m_clk = 0;
+reg m_rst = 0;
 
 wire sfp0_tx_clk = clk;
 wire sfp0_rx_clk = clk;
@@ -48,6 +51,8 @@ assign sfp1_xgmii.txc = sfp1_txc;
 fpga_core dut (
     .clk(clk),
     .rst(dut_ctrl.rst),
+    .m_clk(m_clk),
+    .m_rst(m_rst),
     .btnu(btnu),
     .btnl(btnl),
     .btnd(btnd),
@@ -78,6 +83,13 @@ fpga_core dut (
 );
 
 always #(CLK_PERIOD/2) clk = ~clk;
+always #(M_CLK_PERIOD/2) m_clk = ~m_clk;
+
+initial begin
+    m_rst = 1;
+    repeat(20) @(posedge m_clk);
+    m_rst = 0;
+end
 
 assign dut_ctrl.tx_seq_num    = dut.ludp_tx_seq_num;
 assign dut_ctrl.tx_enabled    = dut.ludp_protocol_inst.f2h_tx_enabled_reg;
@@ -96,7 +108,7 @@ integer wr_total_beats = 0;
 integer rd_total_beats = 0;
 
 // Monitor AXI write bursts
-always @(posedge clk) begin
+always @(posedge m_clk) begin
     if (dut.ludp_sim_axi_if_inst.awvalid && dut.ludp_sim_axi_if_inst.awready) begin
         wr_burst_count = wr_burst_count + 1;
         wr_total_beats = wr_total_beats + dut.ludp_sim_axi_if_inst.awlen + 1;
@@ -109,7 +121,7 @@ always @(posedge clk) begin
 end
 
 // Monitor AXI read bursts
-always @(posedge clk) begin
+always @(posedge m_clk) begin
     if (dut.ludp_sim_axi_if_inst.arvalid && dut.ludp_sim_axi_if_inst.arready) begin
         rd_burst_count = rd_burst_count + 1;
         rd_total_beats = rd_total_beats + dut.ludp_sim_axi_if_inst.arlen + 1;

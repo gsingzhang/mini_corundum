@@ -40,6 +40,9 @@ set SYN_FILES [list \
     "rtl/lib_dma/axi_dma_wr.v" \
     "rtl/lib_dma/axi_dma_rd.v" \
     "rtl/lib_dma/ludp_dma_wrapper.sv" \
+    "rtl/lib_axis/taxi_axis_async_fifo.sv" \
+    "rtl/lib_sync/taxi_sync_reset.sv" \
+    "rtl/lib_sync/taxi_sync_signal.sv" \
     "rtl/icmp_echo_reply.sv" \
     "rtl/taxi_axis_if.sv" \
     "rtl/taxi_axis_arb_mux.sv" \

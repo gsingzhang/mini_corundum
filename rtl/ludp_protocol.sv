@@ -8,6 +8,8 @@ module ludp_protocol #(
 )(
     input  wire        clk,
     input  wire        rst,
+    input  wire        m_clk,
+    input  wire        m_rst,
 
     input  wire [47:0] local_mac,
     input  wire [31:0] local_ip,
@@ -387,8 +389,10 @@ module ludp_protocol #(
         .AXIS_DATA_WIDTH(AXI_DATA_WIDTH),
         .LEN_WIDTH(16)
     ) dma_wrapper_inst (
-        .clk(clk),
-        .rst(rst),
+        .s_clk(clk),
+        .s_rst(rst),
+        .m_clk(m_clk),
+        .m_rst(m_rst),
 
         .wr_desc_addr (dma_wr_desc_addr),
         .wr_desc_len  (dma_wr_desc_len),

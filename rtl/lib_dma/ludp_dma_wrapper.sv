@@ -6,8 +6,10 @@ module ludp_dma_wrapper #(
     parameter int AXIS_DATA_WIDTH = 512,
     parameter int LEN_WIDTH      = 16
 )(
-    input  wire        clk,
-    input  wire        rst,
+    input  wire        s_clk,
+    input  wire        s_rst,
+    input  wire        m_clk,
+    input  wire        m_rst,
 
     input  wire [AXI_ADDR_WIDTH-1:0] wr_desc_addr,
     input  wire [LEN_WIDTH-1:0]      wr_desc_len,
@@ -69,6 +71,155 @@ module ludp_dma_wrapper #(
     output wire                       m_axi_rready
 );
 
+    localparam int AXIS_KEEP_WIDTH = AXIS_DATA_WIDTH / 8;
+
+    // ============================================================
+    // Write descriptor CDC (s_clk -> m_clk)
+    // Simple toggle-handshake synchronizer
+    // ============================================================
+    reg [AXI_ADDR_WIDTH-1:0] wr_desc_addr_m;
+    reg [LEN_WIDTH-1:0]      wr_desc_len_m;
+    reg                      wr_desc_toggle_s;
+    reg                      wr_desc_toggle_m_sync1, wr_desc_toggle_m_sync2;
+    reg                      wr_desc_ready_m;
+    wire                     wr_desc_accept_m = wr_desc_toggle_m_sync2 ^ wr_desc_toggle_m_sync1;
+    wire                     wr_desc_ready_s;
+
+    always @(posedge s_clk) begin
+        if (s_rst) begin
+            wr_desc_toggle_s <= 1'b0;
+        end else if (wr_desc_valid && wr_desc_ready_s) begin
+            wr_desc_toggle_s <= ~wr_desc_toggle_s;
+        end
+    end
+
+    always @(posedge m_clk) begin
+        if (m_rst) begin
+            wr_desc_toggle_m_sync1 <= 1'b0;
+            wr_desc_toggle_m_sync2 <= 1'b0;
+            wr_desc_addr_m <= '0;
+            wr_desc_len_m  <= '0;
+            wr_desc_ready_m <= 1'b0;
+        end else begin
+            wr_desc_toggle_m_sync1 <= wr_desc_toggle_s;
+            wr_desc_toggle_m_sync2 <= wr_desc_toggle_m_sync1;
+            if (wr_desc_accept_m && !wr_desc_ready_m) begin
+                wr_desc_addr_m <= wr_desc_addr;
+                wr_desc_len_m  <= wr_desc_len;
+                wr_desc_ready_m <= 1'b1;
+            end else begin
+                wr_desc_ready_m <= 1'b0;
+            end
+        end
+    end
+
+    assign wr_desc_ready_s = (wr_desc_toggle_s == wr_desc_toggle_m_sync2);
+    assign wr_desc_ready   = wr_desc_ready_s;
+
+    // ============================================================
+    // Read descriptor CDC (s_clk -> m_clk)
+    // ============================================================
+    reg [AXI_ADDR_WIDTH-1:0] rd_desc_addr_m;
+    reg [LEN_WIDTH-1:0]      rd_desc_len_m;
+    reg                      rd_desc_toggle_s;
+    reg                      rd_desc_toggle_m_sync1, rd_desc_toggle_m_sync2;
+    reg                      rd_desc_ready_m;
+    wire                     rd_desc_accept_m = rd_desc_toggle_m_sync2 ^ rd_desc_toggle_m_sync1;
+    wire                     rd_desc_ready_s;
+
+    always @(posedge s_clk) begin
+        if (s_rst) begin
+            rd_desc_toggle_s <= 1'b0;
+        end else if (rd_desc_valid && rd_desc_ready_s) begin
+            rd_desc_toggle_s <= ~rd_desc_toggle_s;
+        end
+    end
+
+    always @(posedge m_clk) begin
+        if (m_rst) begin
+            rd_desc_toggle_m_sync1 <= 1'b0;
+            rd_desc_toggle_m_sync2 <= 1'b0;
+            rd_desc_addr_m <= '0;
+            rd_desc_len_m  <= '0;
+            rd_desc_ready_m <= 1'b0;
+        end else begin
+            rd_desc_toggle_m_sync1 <= rd_desc_toggle_s;
+            rd_desc_toggle_m_sync2 <= rd_desc_toggle_m_sync1;
+            if (rd_desc_accept_m && !rd_desc_ready_m) begin
+                rd_desc_addr_m <= rd_desc_addr;
+                rd_desc_len_m  <= rd_desc_len;
+                rd_desc_ready_m <= 1'b1;
+            end else begin
+                rd_desc_ready_m <= 1'b0;
+            end
+        end
+    end
+
+    assign rd_desc_ready_s = (rd_desc_toggle_s == rd_desc_toggle_m_sync2);
+    assign rd_desc_ready   = rd_desc_ready_s;
+
+    // ============================================================
+    // Write data path: async FIFO (s_clk -> m_clk)
+    // ============================================================
+    taxi_axis_if #(
+        .DATA_W(AXIS_DATA_WIDTH)
+    ) wr_axis_m_if ();
+
+    taxi_axis_if #(
+        .DATA_W(AXIS_DATA_WIDTH)
+    ) wr_axis_s_if ();
+
+    assign wr_axis_s_if.tdata  = wr_axis_tdata;
+    assign wr_axis_s_if.tkeep  = wr_axis_tkeep;
+    assign wr_axis_s_if.tvalid = wr_axis_tvalid;
+    assign wr_axis_s_if.tlast  = wr_axis_tlast;
+    assign wr_axis_s_if.tuser  = 1'b0;
+    assign wr_axis_tready      = wr_axis_s_if.tready;
+
+    taxi_axis_async_fifo #(
+        .DEPTH(512),
+        .FRAME_FIFO(1'b0)
+    ) wr_async_fifo_inst (
+        .s_clk(s_clk),
+        .s_rst(s_rst),
+        .s_axis(wr_axis_s_if),
+        .m_clk(m_clk),
+        .m_rst(m_rst),
+        .m_axis(wr_axis_m_if)
+    );
+
+    // ============================================================
+    // Read data path: async FIFO (m_clk -> s_clk)
+    // ============================================================
+    taxi_axis_if #(
+        .DATA_W(AXIS_DATA_WIDTH)
+    ) rd_axis_m_if ();
+
+    taxi_axis_if #(
+        .DATA_W(AXIS_DATA_WIDTH)
+    ) rd_axis_s_if ();
+
+    assign rd_axis_tdata  = rd_axis_s_if.tdata;
+    assign rd_axis_tkeep  = rd_axis_s_if.tkeep;
+    assign rd_axis_tvalid = rd_axis_s_if.tvalid;
+    assign rd_axis_tlast  = rd_axis_s_if.tlast;
+    assign rd_axis_s_if.tready = rd_axis_tready;
+
+    taxi_axis_async_fifo #(
+        .DEPTH(512),
+        .FRAME_FIFO(1'b0)
+    ) rd_async_fifo_inst (
+        .s_clk(m_clk),
+        .s_rst(m_rst),
+        .s_axis(rd_axis_m_if),
+        .m_clk(s_clk),
+        .m_rst(s_rst),
+        .m_axis(rd_axis_s_if)
+    );
+
+    // ============================================================
+    // AXI DMA engines (on m_clk domain)
+    // ============================================================
     axi_dma_wr #(
         .AXI_DATA_WIDTH(AXI_DATA_WIDTH),
         .AXI_ADDR_WIDTH(AXI_ADDR_WIDTH),
@@ -76,7 +227,7 @@ module ludp_dma_wrapper #(
         .AXI_MAX_BURST_LEN(AXI_MAX_BURST_LEN),
         .AXIS_DATA_WIDTH(AXIS_DATA_WIDTH),
         .AXIS_KEEP_ENABLE(1),
-        .AXIS_KEEP_WIDTH(AXIS_DATA_WIDTH/8),
+        .AXIS_KEEP_WIDTH(AXIS_KEEP_WIDTH),
         .AXIS_LAST_ENABLE(1),
         .AXIS_ID_ENABLE(0),
         .AXIS_DEST_ENABLE(0),
@@ -86,13 +237,13 @@ module ludp_dma_wrapper #(
         .ENABLE_SG(0),
         .ENABLE_UNALIGNED(0)
     ) u_axi_dma_wr (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_write_desc_addr(wr_desc_addr),
-        .s_axis_write_desc_len(wr_desc_len),
+        .clk(m_clk),
+        .rst(m_rst),
+        .s_axis_write_desc_addr(wr_desc_addr_m),
+        .s_axis_write_desc_len(wr_desc_len_m),
         .s_axis_write_desc_tag(4'h1),
-        .s_axis_write_desc_valid(wr_desc_valid),
-        .s_axis_write_desc_ready(wr_desc_ready),
+        .s_axis_write_desc_valid(wr_desc_ready_m),
+        .s_axis_write_desc_ready(),
         .m_axis_write_desc_status_len(),
         .m_axis_write_desc_status_tag(),
         .m_axis_write_desc_status_id(),
@@ -100,11 +251,11 @@ module ludp_dma_wrapper #(
         .m_axis_write_desc_status_user(),
         .m_axis_write_desc_status_error(),
         .m_axis_write_desc_status_valid(),
-        .s_axis_write_data_tdata(wr_axis_tdata),
-        .s_axis_write_data_tkeep(wr_axis_tkeep),
-        .s_axis_write_data_tvalid(wr_axis_tvalid),
-        .s_axis_write_data_tready(wr_axis_tready),
-        .s_axis_write_data_tlast(wr_axis_tlast),
+        .s_axis_write_data_tdata(wr_axis_m_if.tdata),
+        .s_axis_write_data_tkeep(wr_axis_m_if.tkeep),
+        .s_axis_write_data_tvalid(wr_axis_m_if.tvalid),
+        .s_axis_write_data_tready(wr_axis_m_if.tready),
+        .s_axis_write_data_tlast(wr_axis_m_if.tlast),
         .s_axis_write_data_tid(8'h0),
         .s_axis_write_data_tdest(8'h0),
         .s_axis_write_data_tuser(1'b0),
@@ -138,7 +289,7 @@ module ludp_dma_wrapper #(
         .AXI_MAX_BURST_LEN(AXI_MAX_BURST_LEN),
         .AXIS_DATA_WIDTH(AXIS_DATA_WIDTH),
         .AXIS_KEEP_ENABLE(1),
-        .AXIS_KEEP_WIDTH(AXIS_DATA_WIDTH/8),
+        .AXIS_KEEP_WIDTH(AXIS_KEEP_WIDTH),
         .AXIS_LAST_ENABLE(1),
         .AXIS_ID_ENABLE(0),
         .AXIS_DEST_ENABLE(0),
@@ -148,24 +299,24 @@ module ludp_dma_wrapper #(
         .ENABLE_SG(0),
         .ENABLE_UNALIGNED(0)
     ) u_axi_dma_rd (
-        .clk(clk),
-        .rst(rst),
-        .s_axis_read_desc_addr(rd_desc_addr),
-        .s_axis_read_desc_len(rd_desc_len),
+        .clk(m_clk),
+        .rst(m_rst),
+        .s_axis_read_desc_addr(rd_desc_addr_m),
+        .s_axis_read_desc_len(rd_desc_len_m),
         .s_axis_read_desc_tag(4'hB),
         .s_axis_read_desc_id(8'h0),
         .s_axis_read_desc_dest(8'h0),
         .s_axis_read_desc_user(1'b0),
-        .s_axis_read_desc_valid(rd_desc_valid),
-        .s_axis_read_desc_ready(rd_desc_ready),
+        .s_axis_read_desc_valid(rd_desc_ready_m),
+        .s_axis_read_desc_ready(),
         .m_axis_read_desc_status_tag(),
         .m_axis_read_desc_status_error(),
         .m_axis_read_desc_status_valid(),
-        .m_axis_read_data_tdata(rd_axis_tdata),
-        .m_axis_read_data_tkeep(rd_axis_tkeep),
-        .m_axis_read_data_tvalid(rd_axis_tvalid),
-        .m_axis_read_data_tready(rd_axis_tready),
-        .m_axis_read_data_tlast(rd_axis_tlast),
+        .m_axis_read_data_tdata(rd_axis_m_if.tdata),
+        .m_axis_read_data_tkeep(rd_axis_m_if.tkeep),
+        .m_axis_read_data_tvalid(rd_axis_m_if.tvalid),
+        .m_axis_read_data_tready(rd_axis_m_if.tready),
+        .m_axis_read_data_tlast(rd_axis_m_if.tlast),
         .m_axis_read_data_tid(),
         .m_axis_read_data_tdest(),
         .m_axis_read_data_tuser(),

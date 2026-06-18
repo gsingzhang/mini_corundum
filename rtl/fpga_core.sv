@@ -77,7 +77,13 @@ module fpga_core
     input  wire        sfp1_rx_clk,
     input  wire        sfp1_rx_rst,
     input  wire [63:0] sfp1_rxd,
-    input  wire [7:0]  sfp1_rxc
+    input  wire [7:0]  sfp1_rxc,
+
+    /*
+     * DMA clock: 300MHz (DDR4 UI clock)
+     */
+    input  wire        m_clk,
+    input  wire        m_rst
 
 `ifndef SIMULATION
     ,
@@ -450,6 +456,18 @@ wire         ddr4_rlast;
 wire         ddr4_rvalid;
 wire         ddr4_rready;
 
+// DMA/MIG clock domain
+wire dma_clk;
+wire dma_rst;
+
+`ifdef SIMULATION
+assign dma_clk = m_clk;
+assign dma_rst = m_rst;
+`else
+assign dma_clk = ddr4_ui_clk;
+assign dma_rst = ddr4_ui_rst;
+`endif
+
 // LUDP Protocol Instance
 ludp_protocol #(
     .DATA_WIDTH(64),
@@ -461,6 +479,8 @@ ludp_protocol #(
 ludp_protocol_inst (
     .clk(clk),
     .rst(rst),
+    .m_clk(m_clk),
+    .m_rst(m_rst),
 
     .local_mac(local_mac),
     .local_ip(local_ip),
@@ -585,8 +605,8 @@ taxi_axi_if #(
 taxi_axi_ram #(
     .ADDR_W(20)
 ) ludp_axi_ram_inst (
-    .clk(clk),
-    .rst(rst),
+    .clk(dma_clk),
+    .rst(dma_rst),
     .s_axi_wr(ludp_sim_axi_if_inst.wr_slv),
     .s_axi_rd(ludp_sim_axi_if_inst.rd_slv)
 );
@@ -642,6 +662,10 @@ end
 wire        ddr4_ui_clk;
 wire        ddr4_ui_rst;
 wire        ddr4_init_calib_complete;
+
+// DMA runs on ddr4_ui_clk, connects directly to MIG (no CDC needed)
+assign m_clk = ddr4_ui_clk;
+assign m_rst = ddr4_ui_rst;
 
 ddr4_0 ddr4_inst (
     .c0_sys_clk_p           (ddr4_sys_clk_p),
