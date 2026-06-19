@@ -29,6 +29,7 @@ VERILOG_SOURCES += $(RTL_DIR)/$(DUT).sv
 VERILOG_SOURCES += $(RTL_DIR)/taxi_prim/taxi_ram_1r1w_1c.sv
 VERILOG_SOURCES += $(LIB_AXI_DIR)/taxi_axi_if.sv
 VERILOG_SOURCES += $(LIB_AXI_DIR)/taxi_axi_ram.sv
+VERILOG_SOURCES += $(LIB_AXI_DIR)/taxi_axi_ddr_model.sv
 VERILOG_SOURCES += $(RTL_DIR)/lib_dma/axi_dma_wr.v
 VERILOG_SOURCES += $(RTL_DIR)/lib_dma/axi_dma_rd.v
 VERILOG_SOURCES += $(RTL_DIR)/lib_dma/ludp_dma_wrapper.sv
@@ -219,6 +220,17 @@ sim-dve: filelist.f
 sim-verdi: filelist.f
 	$(VCS) $(VCS_BASE_FLAGS) +define+FSDB_DUMP
 	$(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW -l sim-verdi.log
+
+compile-ddr: filelist.f
+	$(VCS) $(VCS_BASE_FLAGS) +define+DDR_MODEL
+
+sim-ddr: compile-ddr
+	setarch x86_64 -R $(SIMV) -no_save +UVM_TESTNAME=$(UVM_TEST_NAME) +UVM_VSEQ=$(UVM_VSEQ) +UVM_VERBOSITY=UVM_LOW -suppress=ASLR_DETECTED_INFO -l sim-ddr.log
+	@echo ""
+	@echo "========================================"
+	@echo " DDR4-model simulation complete"
+	@echo " Log: sim-ddr.log"
+	@echo "========================================"
 
 clean:
 	rm -rf simv simv.daidir csrc

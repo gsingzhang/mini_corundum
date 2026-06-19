@@ -602,6 +602,21 @@ taxi_axi_if #(
     .ID_W(4)
 ) ludp_sim_axi_if_inst ();
 
+`ifdef DDR_MODEL
+taxi_axi_ddr_model #(
+    .ADDR_W(20),
+    .RD_LATENCY(17),
+    .WR_LATENCY(12),
+    .AW_ACCEPT_LATENCY(4),
+    .AR_ACCEPT_LATENCY(4),
+    .B_LATENCY(4)
+) ludp_axi_ram_inst (
+    .clk(dma_clk),
+    .rst(dma_rst),
+    .s_axi_wr(ludp_sim_axi_if_inst.wr_slv),
+    .s_axi_rd(ludp_sim_axi_if_inst.rd_slv)
+);
+`else
 taxi_axi_ram #(
     .ADDR_W(20)
 ) ludp_axi_ram_inst (
@@ -610,6 +625,7 @@ taxi_axi_ram #(
     .s_axi_wr(ludp_sim_axi_if_inst.wr_slv),
     .s_axi_rd(ludp_sim_axi_if_inst.rd_slv)
 );
+`endif
 
 assign ludp_sim_axi_if_inst.awid    = ddr4_awid;
 assign ludp_sim_axi_if_inst.awaddr  = ddr4_awaddr_full;

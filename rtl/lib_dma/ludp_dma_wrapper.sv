@@ -22,6 +22,8 @@ module ludp_dma_wrapper #(
     output wire                       wr_axis_tready,
     input  wire                       wr_axis_tlast,
 
+    output wire                       wr_complete,
+
     input  wire [AXI_ADDR_WIDTH-1:0] rd_desc_addr,
     input  wire [LEN_WIDTH-1:0]      rd_desc_len,
     input  wire                       rd_desc_valid,
@@ -157,6 +159,38 @@ module ludp_dma_wrapper #(
 
     assign rd_desc_ready_s = (rd_desc_toggle_s == rd_desc_toggle_m_sync2);
     assign rd_desc_ready   = rd_desc_ready_s;
+
+    // ============================================================
+    // Write complete CDC (m_clk -> s_clk)
+    // Toggle-handshake synchronizer for BRESP completion
+    // ============================================================
+    reg                      wr_complete_toggle_m;
+    reg                      wr_complete_toggle_s_sync1, wr_complete_toggle_s_sync2;
+    reg                      wr_complete_pulse_s;
+
+    always @(posedge m_clk) begin
+        if (m_rst) begin
+            wr_complete_toggle_m <= 1'b0;
+        end else begin
+            if (m_axi_bvalid && m_axi_bready) begin
+                wr_complete_toggle_m <= ~wr_complete_toggle_m;
+            end
+        end
+    end
+
+    always @(posedge s_clk) begin
+        if (s_rst) begin
+            wr_complete_toggle_s_sync1 <= 1'b0;
+            wr_complete_toggle_s_sync2 <= 1'b0;
+            wr_complete_pulse_s        <= 1'b0;
+        end else begin
+            wr_complete_toggle_s_sync1 <= wr_complete_toggle_m;
+            wr_complete_toggle_s_sync2 <= wr_complete_toggle_s_sync1;
+            wr_complete_pulse_s        <= wr_complete_toggle_s_sync2 ^ wr_complete_toggle_s_sync1;
+        end
+    end
+
+    assign wr_complete = wr_complete_pulse_s;
 
     // ============================================================
     // Write data path: async FIFO (s_clk -> m_clk)

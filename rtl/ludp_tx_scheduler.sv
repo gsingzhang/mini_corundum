@@ -56,6 +56,8 @@ module ludp_tx_scheduler #(
     input  wire                       dma_wr_axis_tready,
     output logic                      dma_wr_axis_tlast,
 
+    input  wire                       dma_wr_complete,
+
     output logic [MEM_ADDR_W-1:0] dma_rd_desc_addr,
     output logic [15:0]           dma_rd_desc_len,
     output logic                  dma_rd_desc_valid,
@@ -115,6 +117,8 @@ module ludp_tx_scheduler #(
     assign tx_pkt_ready = (blk_state[tx_rd_idx_reg] == BLK_READY);
 
     assign dma_wr_enable = (blk_state[dma_wr_idx_reg] == BLK_EMPTY);
+
+    logic [BLK_W-1:0] wr_complete_blk_idx_reg;
 
     wire [BLK_W-1:0] sch_target_blk = retx_pending_reg ? retx_pending_idx_reg :
                                                      tx_rd_idx_reg;
@@ -401,9 +405,13 @@ module ludp_tx_scheduler #(
             end
 
             if (wr_done_pulse) begin
+                wr_complete_blk_idx_reg   <= dma_wr_idx_reg;
                 blk_size[dma_wr_idx_reg]  <= dma_pkt_size;
-                blk_state[dma_wr_idx_reg] <= BLK_READY;
                 dma_wr_idx_reg <= blk_next(dma_wr_idx_reg);
+            end
+
+            if (dma_wr_complete) begin
+                blk_state[wr_complete_blk_idx_reg] <= BLK_READY;
             end
 
             if (tx_pkt_start && (blk_state[tx_rd_idx_reg] == BLK_READY)) begin

@@ -178,6 +178,8 @@ module ludp_protocol #(
     logic                  dma_wr_axis_tready;
     logic                  dma_wr_axis_tlast;
 
+    logic                  dma_wr_complete;
+
     logic [31:0]           dma_rd_desc_addr;
     logic [15:0]           dma_rd_desc_len;
     logic                  dma_rd_desc_valid;
@@ -324,6 +326,8 @@ module ludp_protocol #(
         .dma_wr_axis_tready(dma_wr_axis_tready),
         .dma_wr_axis_tlast (dma_wr_axis_tlast),
 
+        .dma_wr_complete   (dma_wr_complete),
+
         .dma_rd_desc_addr  (dma_rd_desc_addr),
         .dma_rd_desc_len   (dma_rd_desc_len),
         .dma_rd_desc_valid (dma_rd_desc_valid),
@@ -361,6 +365,8 @@ module ludp_protocol #(
         .wr_axis_tvalid(dma_wr_axis_tvalid),
         .wr_axis_tready(dma_wr_axis_tready),
         .wr_axis_tlast (dma_wr_axis_tlast),
+
+        .wr_complete   (dma_wr_complete),
 
         .rd_desc_addr (dma_rd_desc_addr),
         .rd_desc_len  (dma_rd_desc_len),
