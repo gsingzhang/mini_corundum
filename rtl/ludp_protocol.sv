@@ -156,37 +156,16 @@ module ludp_protocol #(
     logic [31:0] rx_src_ip;
     logic [15:0] rx_src_port;
 
-    logic                  sch_dma_rd_req;
-    logic [31:0]           sch_dma_rd_base_addr;
-    logic [15:0]           sch_dma_rd_total_beats;
-    logic                  dma_rd_busy;
-    logic                  dma_rd_done;
-
-    logic [31:0]           sch_dma_wr_base_addr;
-    logic                  sch_dma_wr_enable;
-    logic                  dma_wr_done;
-
-    logic [DATA_WIDTH-1:0] tx_rd_axis_tdata;
-    logic [KEEP_WIDTH-1:0] tx_rd_axis_tkeep;
-    logic                  tx_rd_axis_tvalid;
-    logic                  tx_rd_axis_tready;
-    logic                  tx_rd_axis_tlast;
-    logic                  tx_rd_axis_tuser;
-    logic                  tx_rd_axis_done;
-
     logic        sch_tx_pkt_ready;
     logic        sch_ready;
     logic        sch_tx_pkt_start;
     logic [31:0] sch_tx_pkt_seq;
     logic        sch_tx_pkt_done;
+    logic        sch_dma_wr_enable;
     logic        sch_retx_found;
     logic [15:0] sch_rd_pkt_size;
     logic [31:0] sch_rd_pkt_seq;
     logic        sch_rd_is_retx;
-
-    logic [15:0] dma_wr_total_beats;
-
-    assign dma_wr_total_beats = (dma_pkt_size + KEEP_WIDTH - 1) / KEEP_WIDTH;
 
     logic [31:0]           dma_wr_desc_addr;
     logic [15:0]           dma_wr_desc_len;
@@ -209,6 +188,13 @@ module ludp_protocol #(
     logic                  dma_rd_axis_tvalid;
     logic                  dma_rd_axis_tready;
     logic                  dma_rd_axis_tlast;
+
+    logic [DATA_WIDTH-1:0] tx_rd_axis_tdata;
+    logic [KEEP_WIDTH-1:0] tx_rd_axis_tkeep;
+    logic                  tx_rd_axis_tvalid;
+    logic                  tx_rd_axis_tready;
+    logic                  tx_rd_axis_tlast;
+    logic                  tx_rd_axis_tuser;
 
     ludp_protocol_rx #(
         .DATA_WIDTH(DATA_WIDTH),
@@ -286,22 +272,32 @@ module ludp_protocol #(
     ludp_tx_scheduler #(
         .NUM_BLOCKS(NUM_BLOCKS),
         .KEEP_WIDTH(KEEP_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
         .MEM_ADDR_W(32),
-        .MEM_SLOT_SIZE(MEM_SLOT_SIZE)
+        .MEM_BASE_ADDR('0),
+        .MEM_SLOT_SIZE(MEM_SLOT_SIZE),
+        .AXI_DATA_WIDTH(AXI_DATA_WIDTH),
+        .MAX_PAYLOAD_BYTES(MAX_PAYLOAD_BYTES)
     ) scheduler_inst (
         .clk(clk),
         .rst(rst),
         .clear(rx_cmd_start_req),
 
-        .dma_wr_enable   (sch_dma_wr_enable),
-        .dma_wr_block_done(dma_wr_done),
-        .dma_pkt_size    (dma_pkt_size),
+        .dma_axis_tdata (dma_axis_tdata),
+        .dma_axis_tkeep (dma_axis_tkeep),
+        .dma_axis_tvalid(dma_axis_tvalid),
+        .dma_axis_tready(dma_axis_tready),
+        .dma_axis_tlast (dma_axis_tlast),
+        .dma_axis_tuser (dma_axis_tuser),
+        .dma_pkt_size   (dma_pkt_size),
 
         .tx_pkt_ready   (sch_tx_pkt_ready),
         .sch_ready      (sch_ready),
         .tx_pkt_start   (sch_tx_pkt_start),
         .tx_pkt_seq     (sch_tx_pkt_seq),
         .tx_pkt_done    (sch_tx_pkt_done),
+
+        .dma_wr_enable  (sch_dma_wr_enable),
 
         .retx_req       (rx_retx_req),
         .retx_seq       (rx_retx_seq),
@@ -310,53 +306,12 @@ module ludp_protocol #(
         .rd_pkt_size    (sch_rd_pkt_size),
         .rd_pkt_seq     (sch_rd_pkt_seq),
 
-        .dma_rd_req        (sch_dma_rd_req),
-        .dma_rd_base_addr  (sch_dma_rd_base_addr),
-        .dma_rd_total_beats(sch_dma_rd_total_beats),
-        .dma_rd_busy       (dma_rd_busy),
-        .dma_rd_done       (dma_rd_done),
-
-        .dma_wr_base_addr  (sch_dma_wr_base_addr),
-
-        .rd_is_retx        (sch_rd_is_retx)
-    );
-
-    ludp_tx_dma_axi #(
-        .DATA_WIDTH(DATA_WIDTH),
-        .KEEP_WIDTH(KEEP_WIDTH),
-        .MAX_PAYLOAD_BYTES(MAX_PAYLOAD_BYTES),
-        .MEM_ADDR_W(32),
-        .MEM_SLOT_SIZE(MEM_SLOT_SIZE),
-        .AXI_DATA_WIDTH(AXI_DATA_WIDTH)
-    ) dma_inst (
-        .clk(clk),
-        .rst(rst),
-        .clear(rx_cmd_start_req),
-
-        .wr_axis_tdata (dma_axis_tdata),
-        .wr_axis_tkeep (dma_axis_tkeep),
-        .wr_axis_tvalid(dma_axis_tvalid),
-        .wr_axis_tready(dma_axis_tready),
-        .wr_axis_tlast (dma_axis_tlast),
-        .wr_axis_tuser (dma_axis_tuser),
-
-        .wr_desc_base_addr  (sch_dma_wr_base_addr),
-        .wr_desc_total_beats(dma_wr_total_beats),
-        .wr_desc_enable     (sch_dma_wr_enable),
-        .wr_done(dma_wr_done),
-
-        .rd_desc_req        (sch_dma_rd_req),
-        .rd_desc_base_addr  (sch_dma_rd_base_addr),
-        .rd_desc_total_beats(sch_dma_rd_total_beats),
-        .rd_busy       (dma_rd_busy),
-
         .rd_axis_tdata (tx_rd_axis_tdata),
         .rd_axis_tkeep (tx_rd_axis_tkeep),
         .rd_axis_tvalid(tx_rd_axis_tvalid),
         .rd_axis_tready(tx_rd_axis_tready),
         .rd_axis_tlast (tx_rd_axis_tlast),
         .rd_axis_tuser (tx_rd_axis_tuser),
-        .rd_done  (dma_rd_done),
 
         .dma_wr_desc_addr  (dma_wr_desc_addr),
         .dma_wr_desc_len   (dma_wr_desc_len),
@@ -378,7 +333,9 @@ module ludp_protocol #(
         .dma_rd_axis_tkeep (dma_rd_axis_tkeep),
         .dma_rd_axis_tvalid(dma_rd_axis_tvalid),
         .dma_rd_axis_tready(dma_rd_axis_tready),
-        .dma_rd_axis_tlast (dma_rd_axis_tlast)
+        .dma_rd_axis_tlast (dma_rd_axis_tlast),
+
+        .rd_is_retx        (sch_rd_is_retx)
     );
 
     ludp_dma_wrapper #(
@@ -474,7 +431,7 @@ module ludp_protocol #(
         .data_in_tready(tx_rd_axis_tready),
         .data_in_tlast (tx_rd_axis_tlast),
         .data_in_tuser (tx_rd_axis_tuser),
-        .data_in_done  (dma_rd_done),
+        .data_in_done  (sch_tx_pkt_done),
 
         .tx_pkt_ready   (sch_tx_pkt_ready),
         .sch_ready      (sch_ready),

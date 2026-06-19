@@ -23,7 +23,6 @@ VERILOG_SOURCES += $(RTL_DIR)/taxi_penc.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol_rx.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_protocol_tx.sv
-VERILOG_SOURCES += $(RTL_DIR)/ludp_tx_dma_axi.sv
 VERILOG_SOURCES += $(RTL_DIR)/ludp_tx_scheduler.sv
 VERILOG_SOURCES += $(RTL_DIR)/icmp_echo_reply.sv
 VERILOG_SOURCES += $(RTL_DIR)/$(DUT).sv
