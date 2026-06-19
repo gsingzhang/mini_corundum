@@ -261,6 +261,9 @@ module ludp_tx_scheduler #(
     logic [15:0]                rd_axis_beat_count_reg;
     logic                       rd_clear_pending_reg;
 
+    logic [MEM_ADDR_W-1:0]      rd_desc_addr_out_reg;
+    logic [15:0]                rd_desc_len_out_reg;
+
     logic [AXI_DATA_WIDTH-1:0]  rd_unpack_data_reg;
     logic [AXI_KEEP_WIDTH-1:0]  rd_unpack_strb_reg;
     logic [RATIO_W-1:0]         rd_unpack_idx_reg;

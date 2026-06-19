@@ -32,8 +32,6 @@ set SYN_FILES [list \
     "rtl/ludp_protocol.sv" \
     "rtl/ludp_protocol_rx.sv" \
     "rtl/ludp_protocol_tx.sv" \
-    "rtl/ludp_tx_buffer.sv" \
-    "rtl/ludp_tx_dma_axi.sv" \
     "rtl/ludp_tx_scheduler.sv" \
     "rtl/lib_axi/taxi_axi_if.sv" \
     "rtl/lib_axi/taxi_axi_ram.sv" \

@@ -32,8 +32,6 @@ set SYN_FILES [list \
     "rtl/ludp_protocol.sv" \
     "rtl/ludp_protocol_rx.sv" \
     "rtl/ludp_protocol_tx.sv" \
-    "rtl/ludp_tx_buffer.sv" \
-    "rtl/ludp_tx_dma_axi.sv" \
     "rtl/ludp_tx_scheduler.sv" \
     "rtl/lib_axi/taxi_axi_if.sv" \
     "rtl/lib_axi/taxi_axi_ram.sv" \
@@ -197,6 +195,9 @@ write_checkpoint -force "${PROJECT_NAME}_post_route.dcp"
 # Generate bitstream
 write_bitstream -force "${PROJECT_NAME}.bit"
 
+# Write project for GUI review
+write_project -force "${PROJECT_NAME}"
+
 puts "Bitstream generated successfully at [file normalize "${PROJECT_NAME}.bit"]"
 
 # Copy bitstream to fpga directory
@@ -204,5 +205,12 @@ set copy_target [file normalize [file join $initial_dir "${PROJECT_NAME}.bit"]]
 file copy -force "${PROJECT_NAME}.bit" $copy_target
 
 puts "Bitstream copied to fpga directory: $copy_target"
+
+set xpr_path [file normalize [file join $BUILD_DIR "${PROJECT_NAME}.xpr"]]
+puts ""
+puts "========================================"
+puts " Project file: $xpr_path"
+puts " Review with: vivado $xpr_path"
+puts "========================================"
 
 exit

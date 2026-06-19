@@ -77,12 +77,14 @@ module ludp_dma_wrapper #(
 
     // ============================================================
     // Write descriptor CDC (s_clk -> m_clk)
-    // Simple toggle-handshake synchronizer
+    // Register data in s_clk, then toggle-handshake to m_clk
     // ============================================================
-    reg [AXI_ADDR_WIDTH-1:0] wr_desc_addr_m;
-    reg [LEN_WIDTH-1:0]      wr_desc_len_m;
+    reg [AXI_ADDR_WIDTH-1:0] wr_desc_addr_s;
+    reg [LEN_WIDTH-1:0]      wr_desc_len_s;
     reg                      wr_desc_toggle_s;
     reg                      wr_desc_toggle_m_sync1, wr_desc_toggle_m_sync2;
+    reg [AXI_ADDR_WIDTH-1:0] wr_desc_addr_m;
+    reg [LEN_WIDTH-1:0]      wr_desc_len_m;
     reg                      wr_desc_ready_m;
     wire                     wr_desc_accept_m = wr_desc_toggle_m_sync2 ^ wr_desc_toggle_m_sync1;
     wire                     wr_desc_ready_s;
@@ -90,8 +92,12 @@ module ludp_dma_wrapper #(
     always @(posedge s_clk) begin
         if (s_rst) begin
             wr_desc_toggle_s <= 1'b0;
+            wr_desc_addr_s   <= '0;
+            wr_desc_len_s    <= '0;
         end else if (wr_desc_valid && wr_desc_ready_s) begin
             wr_desc_toggle_s <= ~wr_desc_toggle_s;
+            wr_desc_addr_s   <= wr_desc_addr;
+            wr_desc_len_s    <= wr_desc_len;
         end
     end
 
@@ -105,9 +111,9 @@ module ludp_dma_wrapper #(
         end else begin
             wr_desc_toggle_m_sync1 <= wr_desc_toggle_s;
             wr_desc_toggle_m_sync2 <= wr_desc_toggle_m_sync1;
-            if (wr_desc_accept_m && !wr_desc_ready_m) begin
-                wr_desc_addr_m <= wr_desc_addr;
-                wr_desc_len_m  <= wr_desc_len;
+            if (wr_desc_accept_m) begin
+                wr_desc_addr_m <= wr_desc_addr_s;
+                wr_desc_len_m  <= wr_desc_len_s;
                 wr_desc_ready_m <= 1'b1;
             end else begin
                 wr_desc_ready_m <= 1'b0;
@@ -120,11 +126,14 @@ module ludp_dma_wrapper #(
 
     // ============================================================
     // Read descriptor CDC (s_clk -> m_clk)
+    // Register data in s_clk, then toggle-handshake to m_clk
     // ============================================================
-    reg [AXI_ADDR_WIDTH-1:0] rd_desc_addr_m;
-    reg [LEN_WIDTH-1:0]      rd_desc_len_m;
+    reg [AXI_ADDR_WIDTH-1:0] rd_desc_addr_s;
+    reg [LEN_WIDTH-1:0]      rd_desc_len_s;
     reg                      rd_desc_toggle_s;
     reg                      rd_desc_toggle_m_sync1, rd_desc_toggle_m_sync2;
+    reg [AXI_ADDR_WIDTH-1:0] rd_desc_addr_m;
+    reg [LEN_WIDTH-1:0]      rd_desc_len_m;
     reg                      rd_desc_ready_m;
     wire                     rd_desc_accept_m = rd_desc_toggle_m_sync2 ^ rd_desc_toggle_m_sync1;
     wire                     rd_desc_ready_s;
@@ -132,8 +141,12 @@ module ludp_dma_wrapper #(
     always @(posedge s_clk) begin
         if (s_rst) begin
             rd_desc_toggle_s <= 1'b0;
+            rd_desc_addr_s   <= '0;
+            rd_desc_len_s    <= '0;
         end else if (rd_desc_valid && rd_desc_ready_s) begin
             rd_desc_toggle_s <= ~rd_desc_toggle_s;
+            rd_desc_addr_s   <= rd_desc_addr;
+            rd_desc_len_s    <= rd_desc_len;
         end
     end
 
@@ -147,9 +160,9 @@ module ludp_dma_wrapper #(
         end else begin
             rd_desc_toggle_m_sync1 <= rd_desc_toggle_s;
             rd_desc_toggle_m_sync2 <= rd_desc_toggle_m_sync1;
-            if (rd_desc_accept_m && !rd_desc_ready_m) begin
-                rd_desc_addr_m <= rd_desc_addr;
-                rd_desc_len_m  <= rd_desc_len;
+            if (rd_desc_accept_m) begin
+                rd_desc_addr_m <= rd_desc_addr_s;
+                rd_desc_len_m  <= rd_desc_len_s;
                 rd_desc_ready_m <= 1'b1;
             end else begin
                 rd_desc_ready_m <= 1'b0;
