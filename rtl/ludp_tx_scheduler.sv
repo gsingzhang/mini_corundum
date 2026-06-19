@@ -159,13 +159,14 @@ module ludp_tx_scheduler #(
     assign dma_axis_tready = (wr_state_reg == WR_PACK);
 
     logic wr_done_pulse;
-    logic [MEM_ADDR_W-1:0] wr_base_addr_reg;
+
+    wire [MEM_ADDR_W-1:0] wr_cur_base_addr = MEM_BASE_ADDR + MEM_ADDR_W'(dma_wr_idx_reg) * MEM_ADDR_W'(MEM_SLOT_SIZE);
+    wire [15:0] wr_cur_total_beats = (dma_pkt_size + KEEP_WIDTH - 1) / KEEP_WIDTH;
 
     always_ff @(posedge clk) begin
         if (rst) begin
             wr_state_reg           <= WR_IDLE;
             wr_addr_reg            <= '0;
-            wr_base_addr_reg       <= '0;
             wr_axis_beats_sent_reg <= '0;
             wr_axis_total_beats_reg<= '0;
             wr_pack_idx_reg        <= '0;
@@ -179,10 +180,9 @@ module ludp_tx_scheduler #(
             case (wr_state_reg)
                 WR_IDLE: begin
                     if (dma_axis_tvalid && (blk_state[dma_wr_idx_reg] == BLK_EMPTY)) begin
-                        wr_addr_reg            <= MEM_BASE_ADDR + MEM_ADDR_W'(dma_wr_idx_reg) * MEM_ADDR_W'(MEM_SLOT_SIZE);
-                        wr_base_addr_reg       <= MEM_BASE_ADDR + MEM_ADDR_W'(dma_wr_idx_reg) * MEM_ADDR_W'(MEM_SLOT_SIZE);
+                        wr_addr_reg            <= wr_cur_base_addr;
                         wr_axis_beats_sent_reg <= '0;
-                        wr_axis_total_beats_reg<= (dma_pkt_size + KEEP_WIDTH - 1) / KEEP_WIDTH;
+                        wr_axis_total_beats_reg<= wr_cur_total_beats;
                         wr_pack_idx_reg        <= '0;
                         wr_pack_data_reg       <= '0;
                         wr_pack_strb_reg       <= '0;
@@ -233,8 +233,8 @@ module ludp_tx_scheduler #(
         end
     end
 
-    assign dma_wr_desc_addr  = wr_base_addr_reg;
-    assign dma_wr_desc_len   = wr_axis_total_beats_reg * KEEP_WIDTH;
+    assign dma_wr_desc_addr  = wr_cur_base_addr;
+    assign dma_wr_desc_len   = wr_cur_total_beats * KEEP_WIDTH;
     assign dma_wr_desc_valid = (wr_state_reg == WR_IDLE) && dma_axis_tvalid && (blk_state[dma_wr_idx_reg] == BLK_EMPTY);
 
     assign dma_wr_axis_tdata  = wr_pack_data_reg;
