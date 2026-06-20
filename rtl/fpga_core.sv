@@ -420,6 +420,7 @@ assign ludp_dma_axis_tuser  = ludp_tx_fifo_axis_tuser;
 assign ludp_dma_pkt_size    = test_data_payload_size_reg;
 assign ludp_tx_fifo_axis_tready = ludp_dma_axis_tready;
 
+
 // AXI4 wires for DDR buffer (512-bit to match DDR4 MIG)
 wire [3:0]   ddr4_awid;
 wire [31:0]  ddr4_awaddr_full;
@@ -664,7 +665,7 @@ assign ludp_sim_axi_if_inst.arprot  = ddr4_arprot;
 assign ludp_sim_axi_if_inst.arqos   = ddr4_arqos;
 assign ludp_sim_axi_if_inst.arvalid = ddr4_arvalid;
 assign ddr4_arready = ludp_sim_axi_if_inst.arready;
-assign ddr4_rready = ludp_sim_axi_if_inst.rready;
+assign ludp_sim_axi_if_inst.rready = ddr4_rready;
 assign ddr4_rid    = ludp_sim_axi_if_inst.rid;
 assign ddr4_rdata  = ludp_sim_axi_if_inst.rdata;
 assign ddr4_rresp  = ludp_sim_axi_if_inst.rresp;
@@ -1043,18 +1044,15 @@ always @(posedge clk) begin
 end
 
 always @(posedge clk) begin
-    if (tx_eth_hdr_valid && tx_eth_hdr_ready) begin
-        $display("[%0t] FPGA: Ethernet TX hdr out from udp_complete_64, dest=%012h type=%04h", $time, tx_eth_dest_mac, tx_eth_type);
-    end
-    if (tx_eth_payload_axis_tvalid && tx_eth_payload_axis_tready) begin
-        $display("[%0t] FPGA: eth_axis TX payload data=%016h keep=%02h last=%b", $time, tx_eth_payload_axis_tdata, tx_eth_payload_axis_tkeep, tx_eth_payload_axis_tlast);
-    end
-    if (tx_axis_tvalid && tx_axis_tready) begin
-        $display("[%0t] FPGA: AXIS TX data=%016h keep=%02h last=%b", $time, tx_axis_tdata, tx_axis_tkeep, tx_axis_tlast);
-    end
     if (tx_error_underflow) begin
         $display("[%0t] FPGA: TX error underflow!", $time);
     end
+end
+
+always @(posedge dma_clk) begin
+end
+
+always @(posedge clk) begin
     if (ludp_dma_wr_error_flag && !ludp_dma_wr_error_flag_dly) begin
         $display("[%0t] FPGA: *** DMA WR ERROR! code=%0d blk_tag=%0d ***", $time, ludp_dma_wr_error_code, ludp_dma_wr_error_tag);
     end

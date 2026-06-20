@@ -106,7 +106,6 @@ module ludp_protocol_tx #(
     } tx_state_t;
 
     tx_state_t tx_state_reg;
-    tx_state_t tx_state_prev;
     logic       hdr_valid_reg;
 
     logic [3:0]  tx_beat_count_reg;
@@ -233,23 +232,6 @@ module ludp_protocol_tx #(
                           tx_pkt_ready && f2h_tx_ok && sch_ready;
 
     assign data_in_tready = (tx_state_reg == TX_DATA) && tx_axis_s[1].tready;
-
-    always @(posedge clk) begin
-        if (tx_state_reg == TX_DATA_HDR && hdr_valid_reg && tx_udp_hdr_ready)
-            $display("[PROTO_TX] %0t HDR accepted", $time);
-        if (tx_state_reg == TX_DATA && data_in_tvalid && !data_in_tready)
-            $display("[PROTO_TX] %0t STALLED tvalid=1 tready=0", $time);
-        if (tx_state_reg != tx_state_prev)
-            $display("[PROTO_TX] %0t STATE %0s -> %0s hdr_v=%0b hdr_r=%0b pay_v=%0b pay_r=%0b pkt_rdy=%0b tx_ok=%0b din_v=%0b din_r=%0b",
-                     $time, tx_state_prev.name, tx_state_reg.name,
-                     hdr_valid_reg, tx_udp_hdr_ready,
-                     tx_udp_payload_axis_tvalid, tx_udp_payload_axis_tready,
-                     tx_pkt_ready, f2h_tx_ok,
-                     data_in_tvalid, data_in_tready);
-    end
-
-    always_ff @(posedge clk)
-        tx_state_prev <= tx_state_reg;
 
     always_comb begin
         tx_axis_s[0].tdata  = {DATA_WIDTH{1'b0}};

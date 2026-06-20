@@ -128,7 +128,10 @@ module ludp_protocol #(
 
     localparam int TAG_WIDTH      = 4;
     localparam int LEN_WIDTH      = 16;
-    localparam int DESC_DATA_W    = 32 + LEN_WIDTH + TAG_WIDTH;
+    localparam int RAM_ADDR_WIDTH = 16;
+    localparam int RAM_SEL_WIDTH  = 1;
+    localparam int RAM_SEG_ADDR_WIDTH = 8;
+    localparam int DESC_DATA_W    = 32 + RAM_SEL_WIDTH + RAM_ADDR_WIDTH + LEN_WIDTH + TAG_WIDTH;
     localparam int RD_DESC_DATA_W = 32 + LEN_WIDTH;
     localparam int WR_STATUS_W    = 4 + TAG_WIDTH;
 
@@ -171,17 +174,10 @@ module ludp_protocol #(
     logic        sch_tx_pkt_start;
     logic [31:0] sch_tx_pkt_seq;
     logic        sch_tx_pkt_done;
-    logic        sch_dma_wr_enable;
     logic        sch_retx_found;
     logic [15:0] sch_rd_pkt_size;
     logic [31:0] sch_rd_pkt_seq;
     logic        sch_rd_is_retx;
-
-    logic [511:0]          dma_wr_axis_tdata;
-    logic [63:0]           dma_wr_axis_tkeep;
-    logic                  dma_wr_axis_tvalid;
-    logic                  dma_wr_axis_tready;
-    logic                  dma_wr_axis_tlast;
 
     logic                  sch_dma_wr_error_flag;
     logic [3:0]            sch_dma_wr_error_code;
@@ -194,8 +190,8 @@ module ludp_protocol #(
     logic [511:0]          dma_rd_axis_tdata;
     logic [63:0]           dma_rd_axis_tkeep;
     logic                  dma_rd_axis_tvalid;
-    logic                  dma_rd_axis_tready;
     logic                  dma_rd_axis_tlast;
+    wire                   dma_rd_axis_tready_wire;
 
     logic [DATA_WIDTH-1:0] tx_rd_axis_tdata;
     logic [KEEP_WIDTH-1:0] tx_rd_axis_tkeep;
@@ -211,19 +207,36 @@ module ludp_protocol #(
         .DATA_W(DESC_DATA_W),
         .KEEP_EN(1'b0),
         .LAST_EN(1'b0)
-    ) wr_desc_if ();
+    ) wr_dma_desc_if ();
 
     taxi_axis_if #(
         .DATA_W(WR_STATUS_W),
         .KEEP_EN(1'b0),
         .LAST_EN(1'b0)
-    ) wr_status_if ();
+    ) wr_dma_status_if ();
 
     taxi_axis_if #(
         .DATA_W(RD_DESC_DATA_W),
         .KEEP_EN(1'b0),
         .LAST_EN(1'b0)
     ) rd_desc_if ();
+
+    // ============================================================
+    // Sink signals (scheduler -> wrapper)
+    // ============================================================
+    logic [RAM_ADDR_WIDTH-1:0] sink_desc_ram_addr;
+    logic [LEN_WIDTH-1:0]      sink_desc_len;
+    logic [TAG_WIDTH-1:0]      sink_desc_tag;
+    logic                      sink_desc_valid;
+    logic                      sink_desc_ready;
+    logic [LEN_WIDTH-1:0]      sink_status_len;
+    logic [TAG_WIDTH-1:0]      sink_status_tag;
+    logic                      sink_status_valid;
+    logic [AXI_DATA_WIDTH-1:0] sink_axis_tdata;
+    logic [AXI_DATA_WIDTH/8-1:0] sink_axis_tkeep;
+    logic                      sink_axis_tvalid;
+    logic                      sink_axis_tready;
+    logic                      sink_axis_tlast;
 
     ludp_protocol_rx #(
         .DATA_WIDTH(DATA_WIDTH),
@@ -326,7 +339,23 @@ module ludp_protocol #(
         .tx_pkt_seq     (sch_tx_pkt_seq),
         .tx_pkt_done    (sch_tx_pkt_done),
 
-        .dma_wr_enable  (sch_dma_wr_enable),
+        .dma_wr_enable  (),
+
+        .sink_desc_ram_addr(sink_desc_ram_addr),
+        .sink_desc_len     (sink_desc_len),
+        .sink_desc_tag     (sink_desc_tag),
+        .sink_desc_valid   (sink_desc_valid),
+        .sink_desc_ready   (sink_desc_ready),
+
+        .sink_status_len   (sink_status_len),
+        .sink_status_tag   (sink_status_tag),
+        .sink_status_valid (sink_status_valid),
+
+        .sink_axis_tdata (sink_axis_tdata),
+        .sink_axis_tkeep (sink_axis_tkeep),
+        .sink_axis_tvalid(sink_axis_tvalid),
+        .sink_axis_tready(sink_axis_tready),
+        .sink_axis_tlast (sink_axis_tlast),
 
         .retx_req       (rx_retx_req),
         .retx_seq       (rx_retx_seq),
@@ -342,15 +371,9 @@ module ludp_protocol #(
         .rd_axis_tlast (tx_rd_axis_tlast),
         .rd_axis_tuser (tx_rd_axis_tuser),
 
-        .wr_desc_if(wr_desc_if),
-        .wr_status_if(wr_status_if),
+        .wr_dma_desc_if(wr_dma_desc_if),
+        .wr_dma_status_if(wr_dma_status_if),
         .rd_desc_if(rd_desc_if),
-
-        .dma_wr_axis_tdata (dma_wr_axis_tdata),
-        .dma_wr_axis_tkeep (dma_wr_axis_tkeep),
-        .dma_wr_axis_tvalid(dma_wr_axis_tvalid),
-        .dma_wr_axis_tready(dma_wr_axis_tready),
-        .dma_wr_axis_tlast (dma_wr_axis_tlast),
 
         .dma_wr_error_flag(sch_dma_wr_error_flag),
         .dma_wr_error_code(sch_dma_wr_error_code),
@@ -359,7 +382,7 @@ module ludp_protocol #(
         .dma_rd_axis_tdata (dma_rd_axis_tdata),
         .dma_rd_axis_tkeep (dma_rd_axis_tkeep),
         .dma_rd_axis_tvalid(dma_rd_axis_tvalid),
-        .dma_rd_axis_tready(dma_rd_axis_tready),
+        .dma_rd_axis_tready(dma_rd_axis_tready_wire),
         .dma_rd_axis_tlast (dma_rd_axis_tlast),
 
         .rd_is_retx        (sch_rd_is_retx)
@@ -378,21 +401,31 @@ module ludp_protocol #(
         .m_clk(m_clk),
         .m_rst(m_rst),
 
-        .wr_desc_if(wr_desc_if),
-        .wr_status_if(wr_status_if),
+        .sink_desc_ram_addr(sink_desc_ram_addr),
+        .sink_desc_len     (sink_desc_len),
+        .sink_desc_tag     (sink_desc_tag),
+        .sink_desc_valid   (sink_desc_valid),
+        .sink_desc_ready   (sink_desc_ready),
+
+        .sink_status_len   (sink_status_len),
+        .sink_status_tag   (sink_status_tag),
+        .sink_status_valid (sink_status_valid),
+
+        .sink_axis_tdata (sink_axis_tdata),
+        .sink_axis_tkeep (sink_axis_tkeep),
+        .sink_axis_tvalid(sink_axis_tvalid),
+        .sink_axis_tready(sink_axis_tready),
+        .sink_axis_tlast (sink_axis_tlast),
+
+        .wr_dma_desc_if(wr_dma_desc_if),
+        .wr_dma_status_if(wr_dma_status_if),
         .rd_desc_if(rd_desc_if),
 
-        .wr_axis_tdata (dma_wr_axis_tdata),
-        .wr_axis_tkeep (dma_wr_axis_tkeep),
-        .wr_axis_tvalid(dma_wr_axis_tvalid),
-        .wr_axis_tready(dma_wr_axis_tready),
-        .wr_axis_tlast (dma_wr_axis_tlast),
-
-        .rd_axis_tdata (dma_rd_axis_tdata),
-        .rd_axis_tkeep (dma_rd_axis_tkeep),
-        .rd_axis_tvalid(dma_rd_axis_tvalid),
-        .rd_axis_tready(dma_rd_axis_tready),
-        .rd_axis_tlast (dma_rd_axis_tlast),
+        .rd_axis_tdata_out (dma_rd_axis_tdata),
+        .rd_axis_tkeep_out (dma_rd_axis_tkeep),
+        .rd_axis_tvalid_out(dma_rd_axis_tvalid),
+        .rd_axis_tready_out(dma_rd_axis_tready_wire),
+        .rd_axis_tlast_out (dma_rd_axis_tlast),
 
         .m_axi_awid(m_axi_awid),
         .m_axi_awaddr(m_axi_awaddr),

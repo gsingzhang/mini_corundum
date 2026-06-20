@@ -507,6 +507,7 @@ always @* begin
                         output_active_next = output_cycle_count_reg > 0;
                     end
                     output_last_cycle_next = output_cycle_count_next == 0;
+                    if (output_last_cycle_next)
                     bubble_cycle_next = 1'b0;
                     first_cycle_next = 1'b0;
 
@@ -615,6 +616,21 @@ always @(posedge clk) begin
     end
 end
 
+always @(posedge clk) begin
+    if (s_axis_read_desc_ready && s_axis_read_desc_valid)
+        $display("[%0t] DMA_RD: desc accepted addr=%0d len=%0d", $time, s_axis_read_desc_addr, s_axis_read_desc_len);
+    if (m_axi_arvalid && m_axi_arready)
+        $display("[%0t] DMA_RD: AR handshake addr=%0d arlen=%0d op_word_count=%0d", $time, m_axi_araddr, m_axi_arlen, op_word_count_reg);
+    if (axis_cmd_valid_reg && axis_cmd_ready)
+        $display("[%0t] DMA_RD: axis_cmd consumed input_cc=%0d output_cc=%0d", $time, axis_cmd_input_cycle_count_reg, axis_cmd_output_cycle_count_reg);
+    if (axis_state_reg == AXIS_STATE_READ && (m_axi_rready && m_axi_rvalid))
+        $display("[%0t] DMA_RD: R beat input_cc=%0d output_cc=%0d in_act=%0d out_act=%0d out_last=%0d", $time, input_cycle_count_reg, output_cycle_count_reg, input_active_reg, output_active_reg, output_last_cycle_reg);
+    if (m_axis_read_data_tvalid_int && m_axis_read_data_tlast_int)
+        $display("[%0t] DMA_RD: tlast_int output_cc=%0d output_active=%0d", $time, output_cycle_count_reg, output_active_reg);
+    if (!input_active_reg && axis_state_reg == AXIS_STATE_READ)
+        $display("[%0t] DMA_RD: input_inactive! output_cc=%0d output_active=%0d", $time, output_cycle_count_reg, output_active_reg);
+end
+
 // output datapath logic
 reg [AXIS_DATA_WIDTH-1:0] m_axis_read_data_tdata_reg  = {AXIS_DATA_WIDTH{1'b0}};
 reg [AXIS_KEEP_WIDTH-1:0] m_axis_read_data_tkeep_reg  = {AXIS_KEEP_WIDTH{1'b0}};
@@ -685,6 +701,11 @@ always @(posedge clk) begin
         out_fifo_rd_ptr_reg <= 0;
         m_axis_read_data_tvalid_reg <= 1'b0;
     end
+end
+
+always @(posedge clk) begin
+    if (m_axis_read_data_tvalid_reg && m_axis_read_data_tlast_reg && m_axis_read_data_tready)
+        $display("[%0t] DMA_RD: tlast output handshake fifo_fill=%0d", $time, out_fifo_wr_ptr_reg - out_fifo_rd_ptr_reg);
 end
 
 endmodule

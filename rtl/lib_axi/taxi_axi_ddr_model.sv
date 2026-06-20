@@ -69,6 +69,7 @@ always_ff @(posedge clk) begin
         case (wr_state_reg)
             WR_IDLE: begin
                 if (aw_accept_cnt_reg == 0 && s_axi_wr.awvalid) begin
+                    $display("[%0t] DDR: AW addr=%0d id=%0d len=%0d", $time, s_axi_wr.awaddr, s_axi_wr.awid, s_axi_wr.awlen);
                     wr_id_reg    <= s_axi_wr.awid;
                     wr_addr_reg  <= ADDR_W'(s_axi_wr.awaddr);
                     wr_count_reg <= s_axi_wr.awlen;
@@ -92,7 +93,7 @@ always_ff @(posedge clk) begin
                     if (wr_burst_reg != 2'b00)
                         wr_addr_reg <= wr_addr_reg + (1 << wr_size_reg);
                     wr_count_reg <= wr_count_reg - 1;
-                    if (wr_count_reg == 8'd0 || wr_count_reg == 8'd1) begin
+                    if (wr_count_reg == 8'd0) begin
                         b_id_reg <= wr_id_reg;
                         if (B_LATENCY > 0) begin
                             b_latency_cnt_reg <= B_LATENCY[B_LATENCY-1:0];
@@ -106,7 +107,7 @@ always_ff @(posedge clk) begin
             end
 
             WR_RESP: begin
-                if (s_axi_wr.bready && b_pending_reg) begin
+                if (s_axi_wr.bvalid && s_axi_wr.bready) begin
                     b_pending_reg <= 1'b0;
                     wr_state_reg  <= WR_IDLE;
                 end
@@ -191,6 +192,7 @@ always_ff @(posedge clk) begin
         case (rd_state_reg)
             RD_IDLE: begin
                 if (ar_accept_cnt_reg == 0 && s_axi_rd.arvalid) begin
+                    $display("[%0t] DDR: AR addr=%0d id=%0d len=%0d", $time, s_axi_rd.araddr, s_axi_rd.arid, s_axi_rd.arlen);
                     rd_id_reg    <= s_axi_rd.arid;
                     rd_addr_reg  <= ADDR_W'(s_axi_rd.araddr);
                     rd_count_reg <= s_axi_rd.arlen;
@@ -230,8 +232,9 @@ always_ff @(posedge clk) begin
                     if (rd_burst_reg != 2'b00)
                         rd_addr_reg <= rd_addr_reg + (1 << rd_size_reg);
                     rd_count_reg <= rd_count_reg - 1;
-                    if (rd_count_reg == 1)
+                    if (rd_count_reg == 1) begin
                         rd_state_reg <= RD_IDLE;
+                    end
                 end
             end
 

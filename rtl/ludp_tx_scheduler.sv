@@ -12,9 +12,12 @@ module ludp_tx_scheduler #(
     parameter int RATIO_W          = $clog2(RATIO),
     parameter int TAG_WIDTH        = 4,
     parameter int LEN_WIDTH        = 16,
-    parameter int DESC_DATA_W      = MEM_ADDR_W + LEN_WIDTH + TAG_WIDTH,
-    parameter int RD_DESC_DATA_W   = MEM_ADDR_W + LEN_WIDTH,
-    parameter int WR_STATUS_W      = 4 + TAG_WIDTH
+    parameter int RAM_ADDR_WIDTH   = 16,
+    parameter int RAM_SEL_WIDTH    = 1,
+    parameter int RAM_SEG_ADDR_WIDTH = 8,
+    parameter int DESC_DATA_W      = MEM_ADDR_W + RAM_SEL_WIDTH + RAM_ADDR_WIDTH + LEN_WIDTH + TAG_WIDTH,
+    parameter int WR_STATUS_W      = 4 + TAG_WIDTH,
+    parameter int RD_DESC_DATA_W   = MEM_ADDR_W + LEN_WIDTH
 )(
     input  wire        clk,
     input  wire        rst,
@@ -34,7 +37,25 @@ module ludp_tx_scheduler #(
     input  wire [31:0]  tx_pkt_seq,
     output logic        tx_pkt_done,
 
-    output logic        dma_wr_enable,
+    output logic [RAM_ADDR_WIDTH-1:0] sink_desc_ram_addr,
+    output logic [LEN_WIDTH-1:0]      sink_desc_len,
+    output logic [TAG_WIDTH-1:0]      sink_desc_tag,
+    output logic                      sink_desc_valid,
+    input  wire                       sink_desc_ready,
+
+    input  wire [LEN_WIDTH-1:0]       sink_status_len,
+    input  wire [TAG_WIDTH-1:0]       sink_status_tag,
+    input  wire                       sink_status_valid,
+
+    output logic [AXI_DATA_WIDTH-1:0] sink_axis_tdata,
+    output logic [AXI_KEEP_WIDTH-1:0] sink_axis_tkeep,
+    output logic                      sink_axis_tvalid,
+    input  wire                       sink_axis_tready,
+    output logic                      sink_axis_tlast,
+
+    taxi_axis_if  wr_dma_desc_if,
+    taxi_axis_if  wr_dma_status_if,
+    taxi_axis_if  rd_desc_if,
 
     input  wire        retx_req,
     input  wire [31:0] retx_seq,
@@ -50,19 +71,11 @@ module ludp_tx_scheduler #(
     output logic                  rd_axis_tlast,
     output logic                  rd_axis_tuser,
 
-    taxi_axis_if  wr_desc_if,
-    taxi_axis_if  wr_status_if,
-    taxi_axis_if  rd_desc_if,
-
-    output logic [AXI_DATA_WIDTH-1:0] dma_wr_axis_tdata,
-    output logic [AXI_KEEP_WIDTH-1:0] dma_wr_axis_tkeep,
-    output logic                      dma_wr_axis_tvalid,
-    input  wire                       dma_wr_axis_tready,
-    output logic                      dma_wr_axis_tlast,
-
     output logic                      dma_wr_error_flag,
     output logic [3:0]                dma_wr_error_code,
     output logic [TAG_WIDTH-1:0]      dma_wr_error_tag,
+
+    output logic        dma_wr_enable,
 
     input  wire [AXI_DATA_WIDTH-1:0] dma_rd_axis_tdata,
     input  wire [AXI_KEEP_WIDTH-1:0] dma_rd_axis_tkeep,
@@ -76,9 +89,10 @@ module ludp_tx_scheduler #(
     localparam int BLK_W  = $clog2(NUM_BLOCKS);
     localparam int KEEP_W = KEEP_WIDTH;
 
-    localparam logic [1:0] BLK_EMPTY = 2'd0;
-    localparam logic [1:0] BLK_READY = 2'd1;
-    localparam logic [1:0] BLK_SENT  = 2'd2;
+    localparam logic [1:0] BLK_EMPTY  = 2'd0;
+    localparam logic [1:0] BLK_FILL   = 2'd1;
+    localparam logic [1:0] BLK_READY  = 2'd2;
+    localparam logic [1:0] BLK_SENT   = 2'd3;
 
     logic [15:0] blk_size  [NUM_BLOCKS-1:0];
     logic [31:0] blk_seq   [NUM_BLOCKS-1:0];
@@ -117,12 +131,10 @@ module ludp_tx_scheduler #(
 
     assign tx_pkt_ready = (blk_state[tx_rd_idx_reg] == BLK_READY);
 
-    assign dma_wr_enable = (blk_state[dma_wr_idx_reg] == BLK_EMPTY);
+    assign rd_pkt_size = blk_size[tx_rd_idx_reg];
+    assign rd_pkt_seq  = tx_pkt_seq;
 
-    wire [BLK_W-1:0] sch_target_blk = retx_pending_reg ? retx_pending_idx_reg :
-                                                     tx_rd_idx_reg;
-    assign rd_pkt_size = blk_size[sch_target_blk];
-    assign rd_pkt_seq  = retx_pending_reg ? blk_seq[retx_pending_idx_reg] : tx_pkt_seq;
+    assign dma_wr_enable = (blk_state[dma_wr_idx_reg] == BLK_EMPTY);
 
     function automatic [BLK_W-1:0] blk_next;
         input [BLK_W-1:0] idx;
@@ -132,16 +144,20 @@ module ludp_tx_scheduler #(
             blk_next = idx + 1'b1;
     endfunction
 
-    // ============================================================
-    // Scheduling signals
-    // ============================================================
+    function automatic [RAM_ADDR_WIDTH-1:0] blk_ram_addr;
+        input [BLK_W-1:0] idx;
+        blk_ram_addr = RAM_ADDR_WIDTH'(idx) * RAM_ADDR_WIDTH'(MEM_SLOT_SIZE / (AXI_DATA_WIDTH/8));
+    endfunction
+
     logic sch_dma_rd_req;
     logic [MEM_ADDR_W-1:0] sch_dma_rd_base_addr;
     logic [15:0]           sch_dma_rd_total_beats;
 
+    wire [BLK_W-1:0] sch_target_blk = retx_pending_reg ? retx_pending_idx_reg : tx_rd_idx_reg;
+
     // ============================================================
-    // WRITE PATH: 64-bit AXI-Stream -> Pack -> 512-bit AXI-Stream
-    // Also drives wr_desc_if with {addr, len, tag}
+    // WRITE PATH: 64-bit AXI-Stream -> Pack -> 512-bit -> Sink
+    // Sink writes to RAM, then DMA engine reads from RAM -> AXI
     // ============================================================
     typedef enum logic [1:0] {
         WR_IDLE,
@@ -150,9 +166,6 @@ module ludp_tx_scheduler #(
     } wr_state_t;
 
     wr_state_t wr_state_reg;
-    logic [MEM_ADDR_W-1:0]      wr_addr_reg;
-    logic [15:0]                wr_axis_beats_sent_reg;
-    logic [15:0]                wr_axis_total_beats_reg;
     logic [RATIO_W-1:0]        wr_pack_idx_reg;
     logic [AXI_DATA_WIDTH-1:0]  wr_pack_data_reg;
     logic [AXI_KEEP_WIDTH-1:0]  wr_pack_strb_reg;
@@ -163,35 +176,30 @@ module ludp_tx_scheduler #(
     assign dma_axis_tready = (wr_state_reg == WR_PACK);
 
     logic wr_done_pulse;
+    logic wr_done_pulse_d1;
 
-    wire [MEM_ADDR_W-1:0] wr_cur_base_addr = MEM_BASE_ADDR + MEM_ADDR_W'(dma_wr_idx_reg) * MEM_ADDR_W'(MEM_SLOT_SIZE);
     wire [15:0] wr_cur_total_beats = (dma_pkt_size + KEEP_WIDTH - 1) / KEEP_WIDTH;
+    wire [RAM_ADDR_WIDTH-1:0] wr_cur_ram_addr = blk_ram_addr(dma_wr_idx_reg);
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            wr_state_reg           <= WR_IDLE;
-            wr_addr_reg            <= '0;
-            wr_axis_beats_sent_reg <= '0;
-            wr_axis_total_beats_reg<= '0;
-            wr_pack_idx_reg        <= '0;
-            wr_pack_data_reg       <= '0;
-            wr_pack_strb_reg       <= '0;
-            wr_pack_last_reg       <= 1'b0;
-            wr_done_pulse          <= 1'b0;
+            wr_state_reg     <= WR_IDLE;
+            wr_pack_idx_reg  <= '0;
+            wr_pack_data_reg <= '0;
+            wr_pack_strb_reg <= '0;
+            wr_pack_last_reg <= 1'b0;
+            wr_done_pulse    <= 1'b0;
         end else begin
             wr_done_pulse <= 1'b0;
 
             case (wr_state_reg)
                 WR_IDLE: begin
-                    if (dma_axis_tvalid && (blk_state[dma_wr_idx_reg] == BLK_EMPTY)) begin
-                        wr_addr_reg            <= wr_cur_base_addr;
-                        wr_axis_beats_sent_reg <= '0;
-                        wr_axis_total_beats_reg<= wr_cur_total_beats;
-                        wr_pack_idx_reg        <= '0;
-                        wr_pack_data_reg       <= '0;
-                        wr_pack_strb_reg       <= '0;
-                        wr_pack_last_reg       <= 1'b0;
-                        wr_state_reg           <= WR_PACK;
+                    if (!wr_done_pulse && dma_axis_tvalid && (blk_state[dma_wr_idx_reg] == BLK_EMPTY) && sink_desc_ready) begin
+                        wr_pack_idx_reg  <= '0;
+                        wr_pack_data_reg <= '0;
+                        wr_pack_strb_reg <= '0;
+                        wr_pack_last_reg <= 1'b0;
+                        wr_state_reg     <= WR_PACK;
                     end
                 end
 
@@ -199,7 +207,6 @@ module ludp_tx_scheduler #(
                     if (dma_axis_tvalid) begin
                         wr_pack_data_reg[wr_pack_idx_reg * DATA_WIDTH +: DATA_WIDTH] <= dma_axis_tdata;
                         wr_pack_strb_reg[wr_pack_idx_reg * KEEP_WIDTH +: KEEP_WIDTH] <= dma_axis_tkeep;
-                        wr_axis_beats_sent_reg <= wr_axis_beats_sent_reg + 1'b1;
 
                         if (wr_pack_full || dma_axis_tlast) begin
                             wr_pack_last_reg <= dma_axis_tlast;
@@ -220,7 +227,7 @@ module ludp_tx_scheduler #(
                 end
 
                 WR_FINISH: begin
-                    if (dma_wr_axis_tready) begin
+                    if (sink_axis_tready) begin
                         if (wr_pack_last_reg) begin
                             wr_done_pulse <= 1'b1;
                             wr_state_reg  <= WR_IDLE;
@@ -237,28 +244,67 @@ module ludp_tx_scheduler #(
         end
     end
 
-    assign wr_desc_if.tdata[TAG_WIDTH-1:0]                    = TAG_WIDTH'(dma_wr_idx_reg);
-    assign wr_desc_if.tdata[TAG_WIDTH+LEN_WIDTH-1:TAG_WIDTH]   = wr_cur_total_beats * KEEP_WIDTH;
-    assign wr_desc_if.tdata[DESC_DATA_W-1:TAG_WIDTH+LEN_WIDTH] = wr_cur_base_addr;
-    assign wr_desc_if.tvalid = (wr_state_reg == WR_IDLE) && dma_axis_tvalid && (blk_state[dma_wr_idx_reg] == BLK_EMPTY);
+    assign sink_desc_ram_addr = wr_cur_ram_addr;
+    assign sink_desc_len      = wr_cur_total_beats * KEEP_WIDTH;
+    assign sink_desc_tag      = TAG_WIDTH'(dma_wr_idx_reg);
+    assign sink_desc_valid = (wr_state_reg == WR_IDLE) && dma_axis_tvalid && (blk_state[dma_wr_idx_reg] == BLK_EMPTY) && !wr_done_pulse;
 
-    assign dma_wr_axis_tdata  = wr_pack_data_reg;
-    assign dma_wr_axis_tkeep  = wr_pack_strb_reg;
-    assign dma_wr_axis_tvalid = (wr_state_reg == WR_FINISH);
-    assign dma_wr_axis_tlast  = (wr_state_reg == WR_FINISH) && wr_pack_last_reg;
+    assign sink_axis_tdata  = wr_pack_data_reg;
+    assign sink_axis_tkeep  = wr_pack_strb_reg;
+    assign sink_axis_tvalid = (wr_state_reg == WR_FINISH);
+    assign sink_axis_tlast  = (wr_state_reg == WR_FINISH) && wr_pack_last_reg;
+
+    always_ff @(posedge clk) begin
+        if (wr_done_pulse)
+            wr_done_pulse_d1 <= 1'b1;
+        else
+            wr_done_pulse_d1 <= 1'b0;
+    end
 
     // ============================================================
-    // Write completion: consume wr_status_if
+    // Write DMA descriptor: {axi_addr, ram_sel, ram_addr, len, tag}
+    // Sent when sink status confirms data is written to RAM
+    // ============================================================
+    wire [MEM_ADDR_W-1:0] wr_cur_axi_addr = MEM_BASE_ADDR + MEM_ADDR_W'(dma_wr_idx_reg) * MEM_ADDR_W'(MEM_SLOT_SIZE);
+
+    logic [DESC_DATA_W-1:0] wr_dma_desc_pending_data [NUM_BLOCKS-1:0];
+    logic [NUM_BLOCKS-1:0]  wr_dma_desc_pending;
+
+    wire [3:0]            wr_status_error = wr_dma_status_if.tdata[TAG_WIDTH+3-1:TAG_WIDTH];
+    wire [TAG_WIDTH-1:0]  wr_status_tag   = wr_dma_status_if.tdata[TAG_WIDTH-1:0];
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            wr_dma_desc_pending <= '0;
+        end else begin
+            if (sink_desc_valid && sink_desc_ready) begin
+                wr_dma_desc_pending[sink_desc_tag[BLK_W-1:0]] <= 1'b1;
+                wr_dma_desc_pending_data[sink_desc_tag[BLK_W-1:0]] <= {
+                    wr_cur_axi_addr,
+                    RAM_SEL_WIDTH'(1'b0),
+                    wr_cur_ram_addr,
+                    LEN_WIDTH'(wr_cur_total_beats * KEEP_WIDTH),
+                    sink_desc_tag
+                };
+            end
+            if (wr_dma_desc_if.tvalid && wr_dma_desc_if.tready) begin
+                wr_dma_desc_pending[wr_dma_desc_if.tdata[TAG_WIDTH-1:0]] <= 1'b0;
+            end
+        end
+    end
+
+    assign wr_dma_desc_if.tdata  = wr_dma_desc_pending_data[sink_status_tag[BLK_W-1:0]];
+    assign wr_dma_desc_if.tvalid = sink_status_valid && wr_dma_desc_pending[sink_status_tag[BLK_W-1:0]];
+
+    // ============================================================
+    // Write DMA status: consume wr_dma_status_if
     // tdata = {error[3:0], tag[TAG_WIDTH-1:0]}
     // ============================================================
-    wire [3:0]            wr_status_error = wr_status_if.tdata[TAG_WIDTH+3-1:TAG_WIDTH];
-    wire [TAG_WIDTH-1:0]  wr_status_tag   = wr_status_if.tdata[TAG_WIDTH-1:0];
 
-    assign wr_status_if.tready = 1'b1;
+    assign wr_dma_status_if.tready = 1'b1;
 
     // ============================================================
     // READ PATH: 512-bit AXI-Stream -> Unpack -> 64-bit AXI-Stream
-    // Also drives rd_desc_if with {addr, len}
     // ============================================================
     typedef enum logic [1:0] {
         RD_IDLE,
@@ -267,7 +313,6 @@ module ludp_tx_scheduler #(
     } rd_state_t;
 
     rd_state_t rd_state_reg;
-    logic [MEM_ADDR_W-1:0]      rd_addr_reg;
     logic [15:0]                rd_axis_total_beats_reg;
     logic [15:0]                rd_axis_beat_count_reg;
     logic                       rd_clear_pending_reg;
@@ -282,10 +327,12 @@ module ludp_tx_scheduler #(
 
     wire rd_busy = (rd_state_reg != RD_IDLE) || rd_unpack_valid_reg;
 
+    wire rd_unpack_last_beat = rd_unpack_valid_reg && rd_axis_tready &&
+                               (rd_unpack_idx_reg == RATIO_W'(RATIO - 1));
+
     always_ff @(posedge clk) begin
         if (rst) begin
             rd_state_reg            <= RD_IDLE;
-            rd_addr_reg             <= '0;
             rd_axis_total_beats_reg <= '0;
             rd_axis_beat_count_reg  <= '0;
             rd_done_pulse           <= 1'b0;
@@ -315,7 +362,6 @@ module ludp_tx_scheduler #(
             case (rd_state_reg)
                 RD_IDLE: begin
                     if (sch_dma_rd_req && !rd_unpack_valid_reg) begin
-                        rd_addr_reg             <= sch_dma_rd_base_addr;
                         rd_axis_total_beats_reg <= sch_dma_rd_total_beats;
                         rd_axis_beat_count_reg  <= '0;
                         rd_clear_pending_reg    <= 1'b0;
@@ -330,7 +376,7 @@ module ludp_tx_scheduler #(
                 end
 
                 RD_DATA: begin
-                    if (dma_rd_axis_tvalid && (!rd_unpack_valid_reg || rd_axis_tready)) begin
+                    if (dma_rd_axis_tvalid && (!rd_unpack_valid_reg || rd_unpack_last_beat)) begin
                         rd_unpack_data_reg     <= dma_rd_axis_tdata;
                         rd_unpack_strb_reg     <= {AXI_KEEP_WIDTH{1'b1}};
                         rd_unpack_valid_reg    <= 1'b1;
@@ -363,11 +409,11 @@ module ludp_tx_scheduler #(
         end
     end
 
-    assign rd_desc_if.tdata[LEN_WIDTH-1:0]                = sch_dma_rd_total_beats * KEEP_WIDTH;
-    assign rd_desc_if.tdata[RD_DESC_DATA_W-1:LEN_WIDTH]   = sch_dma_rd_base_addr;
+    assign rd_desc_if.tdata[LEN_WIDTH-1:0]              = sch_dma_rd_total_beats * KEEP_WIDTH;
+    assign rd_desc_if.tdata[RD_DESC_DATA_W-1:LEN_WIDTH] = sch_dma_rd_base_addr;
     assign rd_desc_if.tvalid = (rd_state_reg == RD_DESC);
 
-    assign dma_rd_axis_tready = (rd_state_reg == RD_DATA) && (!rd_unpack_valid_reg || rd_axis_tready);
+    assign dma_rd_axis_tready = (rd_state_reg == RD_DATA) && (!rd_unpack_valid_reg || rd_unpack_last_beat);
 
     assign rd_axis_tdata  = rd_unpack_valid_reg ?
                             rd_unpack_data_reg[rd_unpack_idx_reg * DATA_WIDTH +: DATA_WIDTH] : '0;
@@ -419,13 +465,15 @@ module ludp_tx_scheduler #(
             end
 
             if (wr_done_pulse) begin
-                blk_size[dma_wr_idx_reg]  <= dma_pkt_size;
+                blk_size[dma_wr_idx_reg] <= dma_pkt_size;
+                blk_state[dma_wr_idx_reg] <= BLK_FILL;
                 dma_wr_idx_reg <= blk_next(dma_wr_idx_reg);
             end
 
-            if (wr_status_if.tvalid) begin
+            if (wr_dma_status_if.tvalid) begin
                 if (wr_status_error == 4'd0) begin
-                    blk_state[wr_status_tag[BLK_W-1:0]] <= BLK_READY;
+                    if (blk_state[wr_status_tag[BLK_W-1:0]] == BLK_FILL)
+                        blk_state[wr_status_tag[BLK_W-1:0]] <= BLK_READY;
                 end else begin
                     blk_state[wr_status_tag[BLK_W-1:0]] <= BLK_EMPTY;
                     dma_wr_error_flag <= 1'b1;
@@ -439,8 +487,7 @@ module ludp_tx_scheduler #(
             end
 
             if (rd_done_pulse) begin
-                if (sch_is_retx_reg) begin
-                end else begin
+                if (!sch_is_retx_reg) begin
                     blk_state[rd_blk_idx_reg] <= BLK_SENT;
                     tx_rd_idx_reg <= blk_next(tx_rd_idx_reg);
                     for (int i = 0; i < NUM_BLOCKS; i = i + 1) begin
@@ -467,8 +514,9 @@ module ludp_tx_scheduler #(
                 end
 
                 SCH_READING: begin
-                    if (rd_done_pulse)
+                    if (rd_done_pulse) begin
                         sch_state_reg <= SCH_IDLE;
+                    end
                 end
 
                 default: sch_state_reg <= SCH_IDLE;
@@ -487,26 +535,5 @@ module ludp_tx_scheduler #(
     assign rd_is_retx = sch_is_retx_reg;
 
     assign tx_pkt_done = rd_done_pulse && !sch_is_retx_reg;
-
-    always @(posedge clk) begin
-        if (wr_done_pulse)
-            $display("[SCHED] %0t WR done blk=%0d tag=%0d -> DMA pending wr_idx=%0d", $time, dma_wr_idx_reg, dma_wr_idx_reg, blk_next(dma_wr_idx_reg));
-        if (wr_status_if.tvalid) begin
-            if (wr_status_error == 4'd0)
-                $display("[SCHED] %0t WR COMPLETE blk=%0d tag=%0d OK -> BLK_READY", $time, wr_status_tag, wr_status_tag);
-            else
-                $display("[SCHED] %0t WR COMPLETE blk=%0d tag=%0d ERROR=%0d -> BLK_EMPTY ***", $time, wr_status_tag, wr_status_tag, wr_status_error);
-        end
-        if (rd_done_pulse)
-            $display("[SCHED] %0t RD done blk=%0d is_retx=%0b blk_state=[%0d,%0d,%0d] tx_rd_idx=%0d",
-                     $time, rd_blk_idx_reg, sch_is_retx_reg,
-                     blk_state[0], blk_state[1], blk_state[2], tx_rd_idx_reg);
-        if (sch_dma_rd_req)
-            $display("[SCHED] %0t RD req blk=%0d addr=%08h beats=%0d busy=%0b",
-                     $time, sch_target_blk, sch_dma_rd_base_addr, sch_dma_rd_total_beats, rd_busy);
-        if (tx_pkt_start && !sch_dma_rd_req)
-            $display("[SCHED] %0t TX start but NO rd_req! sch_state=%0d can_issue=%0b rd_busy=%0b blk_rdy=%0b",
-                     $time, sch_state_reg, sch_can_issue, rd_busy, (blk_state[tx_rd_idx_reg] == BLK_READY));
-    end
 
 endmodule

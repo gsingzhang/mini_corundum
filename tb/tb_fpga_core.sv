@@ -114,9 +114,6 @@ always @(posedge m_clk) begin
         wr_total_beats = wr_total_beats + dut.ludp_sim_axi_if_inst.awlen + 1;
         if (dut.ludp_sim_axi_if_inst.awlen + 1 > wr_max_burst)
             wr_max_burst = dut.ludp_sim_axi_if_inst.awlen + 1;
-        $display("[%0t] AXI_WR_BURST #%0d: awlen=%0d (beats=%0d) addr=0x%08x",
-                 $time, wr_burst_count, dut.ludp_sim_axi_if_inst.awlen,
-                 dut.ludp_sim_axi_if_inst.awlen + 1, dut.ludp_sim_axi_if_inst.awaddr);
     end
 end
 
@@ -127,9 +124,6 @@ always @(posedge m_clk) begin
         rd_total_beats = rd_total_beats + dut.ludp_sim_axi_if_inst.arlen + 1;
         if (dut.ludp_sim_axi_if_inst.arlen + 1 > rd_max_burst)
             rd_max_burst = dut.ludp_sim_axi_if_inst.arlen + 1;
-        $display("[%0t] AXI_RD_BURST #%0d: arlen=%0d (beats=%0d) addr=0x%08x",
-                 $time, rd_burst_count, dut.ludp_sim_axi_if_inst.arlen,
-                 dut.ludp_sim_axi_if_inst.arlen + 1, dut.ludp_sim_axi_if_inst.araddr);
     end
 end
 
