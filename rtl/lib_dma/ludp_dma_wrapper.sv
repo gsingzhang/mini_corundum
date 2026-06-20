@@ -39,6 +39,7 @@ module ludp_dma_wrapper #(
     taxi_axis_if   wr_dma_status_if,
 
     taxi_axis_if   rd_desc_if,
+    taxi_axis_if   rd_dma_status_if,
 
     output wire [AXI_DATA_WIDTH-1:0] rd_axis_tdata_out,
     output wire [(AXI_DATA_WIDTH/8)-1:0] rd_axis_tkeep_out,
@@ -87,28 +88,27 @@ module ludp_dma_wrapper #(
     localparam int AXIS_KEEP_WIDTH = AXIS_DATA_WIDTH / 8;
     localparam int WR_DMA_DESC_W = AXI_ADDR_WIDTH + RAM_SEL_WIDTH + RAM_ADDR_WIDTH + LEN_WIDTH + TAG_WIDTH;
     localparam int WR_DMA_STATUS_W = TAG_WIDTH + 4;
-    localparam int RD_DESC_DATA_W = AXI_ADDR_WIDTH + LEN_WIDTH;
+    localparam int RD_DMA_DESC_W = AXI_ADDR_WIDTH + RAM_SEL_WIDTH + RAM_ADDR_WIDTH + LEN_WIDTH + TAG_WIDTH;
+    localparam int RD_DMA_STATUS_W = TAG_WIDTH + 4;
 
     // ============================================================
-    // RAM signals (connect sink write port and DMA read port)
+    // TX RAM (async: wr=s_clk, rd=m_clk)
+    // sink writes data, dma_if_axi_wr reads data
     // ============================================================
-    wire [RAM_SEG_COUNT*RAM_SEG_BE_WIDTH-1:0]   ram_wr_cmd_be;
-    wire [RAM_SEG_COUNT*RAM_SEG_ADDR_WIDTH-1:0]  ram_wr_cmd_addr;
-    wire [RAM_SEG_COUNT*RAM_SEG_DATA_WIDTH-1:0]  ram_wr_cmd_data;
-    wire [RAM_SEG_COUNT-1:0]                     ram_wr_cmd_valid;
-    wire [RAM_SEG_COUNT-1:0]                     ram_wr_cmd_ready;
-    wire [RAM_SEG_COUNT-1:0]                     ram_wr_done;
+    wire [RAM_SEG_COUNT*RAM_SEG_BE_WIDTH-1:0]   tx_ram_wr_cmd_be;
+    wire [RAM_SEG_COUNT*RAM_SEG_ADDR_WIDTH-1:0]  tx_ram_wr_cmd_addr;
+    wire [RAM_SEG_COUNT*RAM_SEG_DATA_WIDTH-1:0]  tx_ram_wr_cmd_data;
+    wire [RAM_SEG_COUNT-1:0]                     tx_ram_wr_cmd_valid;
+    wire [RAM_SEG_COUNT-1:0]                     tx_ram_wr_cmd_ready;
+    wire [RAM_SEG_COUNT-1:0]                     tx_ram_wr_done;
 
-    wire [RAM_SEG_COUNT*RAM_SEG_ADDR_WIDTH-1:0]  ram_rd_cmd_addr;
-    wire [RAM_SEG_COUNT-1:0]                     ram_rd_cmd_valid;
-    wire [RAM_SEG_COUNT-1:0]                     ram_rd_cmd_ready;
-    wire [RAM_SEG_COUNT*RAM_SEG_DATA_WIDTH-1:0]  ram_rd_resp_data;
-    wire [RAM_SEG_COUNT-1:0]                     ram_rd_resp_valid;
-    wire [RAM_SEG_COUNT-1:0]                     ram_rd_resp_ready;
+    wire [RAM_SEG_COUNT*RAM_SEG_ADDR_WIDTH-1:0]  tx_ram_rd_cmd_addr;
+    wire [RAM_SEG_COUNT-1:0]                     tx_ram_rd_cmd_valid;
+    wire [RAM_SEG_COUNT-1:0]                     tx_ram_rd_cmd_ready;
+    wire [RAM_SEG_COUNT*RAM_SEG_DATA_WIDTH-1:0]  tx_ram_rd_resp_data;
+    wire [RAM_SEG_COUNT-1:0]                     tx_ram_rd_resp_valid;
+    wire [RAM_SEG_COUNT-1:0]                     tx_ram_rd_resp_ready;
 
-    // ============================================================
-    // Shared Packet Buffer RAM (async: wr=s_clk, rd=m_clk)
-    // ============================================================
     dma_psdpram_async #(
         .SIZE(RAM_SIZE),
         .SEG_COUNT(RAM_SEG_COUNT),
@@ -116,29 +116,71 @@ module ludp_dma_wrapper #(
         .SEG_BE_WIDTH(RAM_SEG_BE_WIDTH),
         .SEG_ADDR_WIDTH(RAM_SEG_ADDR_WIDTH),
         .PIPELINE(2)
-    ) ram_inst (
+    ) tx_ram_inst (
         .clk_wr(s_clk),
         .rst_wr(s_rst),
-        .wr_cmd_be(ram_wr_cmd_be),
-        .wr_cmd_addr(ram_wr_cmd_addr),
-        .wr_cmd_data(ram_wr_cmd_data),
-        .wr_cmd_valid(ram_wr_cmd_valid),
-        .wr_cmd_ready(ram_wr_cmd_ready),
-        .wr_done(ram_wr_done),
+        .wr_cmd_be(tx_ram_wr_cmd_be),
+        .wr_cmd_addr(tx_ram_wr_cmd_addr),
+        .wr_cmd_data(tx_ram_wr_cmd_data),
+        .wr_cmd_valid(tx_ram_wr_cmd_valid),
+        .wr_cmd_ready(tx_ram_wr_cmd_ready),
+        .wr_done(tx_ram_wr_done),
 
         .clk_rd(m_clk),
         .rst_rd(m_rst),
-        .rd_cmd_addr(ram_rd_cmd_addr),
-        .rd_cmd_valid(ram_rd_cmd_valid),
-        .rd_cmd_ready(ram_rd_cmd_ready),
-        .rd_resp_data(ram_rd_resp_data),
-        .rd_resp_valid(ram_rd_resp_valid),
-        .rd_resp_ready(ram_rd_resp_ready)
+        .rd_cmd_addr(tx_ram_rd_cmd_addr),
+        .rd_cmd_valid(tx_ram_rd_cmd_valid),
+        .rd_cmd_ready(tx_ram_rd_cmd_ready),
+        .rd_resp_data(tx_ram_rd_resp_data),
+        .rd_resp_valid(tx_ram_rd_resp_valid),
+        .rd_resp_ready(tx_ram_rd_resp_ready)
+    );
+
+    // ============================================================
+    // RX RAM (sync: wr=m_clk, rd=m_clk)
+    // dma_if_axi_rd writes data, source reads data
+    // ============================================================
+    wire [RAM_SEG_COUNT*RAM_SEG_BE_WIDTH-1:0]   rx_ram_wr_cmd_be;
+    wire [RAM_SEG_COUNT*RAM_SEG_ADDR_WIDTH-1:0]  rx_ram_wr_cmd_addr;
+    wire [RAM_SEG_COUNT*RAM_SEG_DATA_WIDTH-1:0]  rx_ram_wr_cmd_data;
+    wire [RAM_SEG_COUNT-1:0]                     rx_ram_wr_cmd_valid;
+    wire [RAM_SEG_COUNT-1:0]                     rx_ram_wr_cmd_ready;
+    wire [RAM_SEG_COUNT-1:0]                     rx_ram_wr_done;
+
+    wire [RAM_SEG_COUNT*RAM_SEG_ADDR_WIDTH-1:0]  rx_ram_rd_cmd_addr;
+    wire [RAM_SEG_COUNT-1:0]                     rx_ram_rd_cmd_valid;
+    wire [RAM_SEG_COUNT-1:0]                     rx_ram_rd_cmd_ready;
+    wire [RAM_SEG_COUNT*RAM_SEG_DATA_WIDTH-1:0]  rx_ram_rd_resp_data;
+    wire [RAM_SEG_COUNT-1:0]                     rx_ram_rd_resp_valid;
+    wire [RAM_SEG_COUNT-1:0]                     rx_ram_rd_resp_ready;
+
+    dma_psdpram #(
+        .SIZE(RAM_SIZE),
+        .SEG_COUNT(RAM_SEG_COUNT),
+        .SEG_DATA_WIDTH(RAM_SEG_DATA_WIDTH),
+        .SEG_BE_WIDTH(RAM_SEG_BE_WIDTH),
+        .SEG_ADDR_WIDTH(RAM_SEG_ADDR_WIDTH),
+        .PIPELINE(2)
+    ) rx_ram_inst (
+        .clk(m_clk),
+        .rst(m_rst),
+        .wr_cmd_be(rx_ram_wr_cmd_be),
+        .wr_cmd_addr(rx_ram_wr_cmd_addr),
+        .wr_cmd_data(rx_ram_wr_cmd_data),
+        .wr_cmd_valid(rx_ram_wr_cmd_valid),
+        .wr_cmd_ready(rx_ram_wr_cmd_ready),
+        .wr_done(rx_ram_wr_done),
+        .rd_cmd_addr(rx_ram_rd_cmd_addr),
+        .rd_cmd_valid(rx_ram_rd_cmd_valid),
+        .rd_cmd_ready(rx_ram_rd_cmd_ready),
+        .rd_resp_data(rx_ram_rd_resp_data),
+        .rd_resp_valid(rx_ram_rd_resp_valid),
+        .rd_resp_ready(rx_ram_rd_resp_ready)
     );
 
     // ============================================================
     // AXI-Stream Sink (s_clk domain)
-    // Receives 512-bit data, writes to RAM
+    // Receives 512-bit data, writes to TX RAM
     // ============================================================
     dma_client_axis_sink #(
         .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH),
@@ -182,12 +224,12 @@ module ludp_dma_wrapper #(
         .s_axis_write_data_tdest(8'h0),
         .s_axis_write_data_tuser(1'b0),
 
-        .ram_wr_cmd_be(ram_wr_cmd_be),
-        .ram_wr_cmd_addr(ram_wr_cmd_addr),
-        .ram_wr_cmd_data(ram_wr_cmd_data),
-        .ram_wr_cmd_valid(ram_wr_cmd_valid),
-        .ram_wr_cmd_ready(ram_wr_cmd_ready),
-        .ram_wr_done(ram_wr_done),
+        .ram_wr_cmd_be(tx_ram_wr_cmd_be),
+        .ram_wr_cmd_addr(tx_ram_wr_cmd_addr),
+        .ram_wr_cmd_data(tx_ram_wr_cmd_data),
+        .ram_wr_cmd_valid(tx_ram_wr_cmd_valid),
+        .ram_wr_cmd_ready(tx_ram_wr_cmd_ready),
+        .ram_wr_done(tx_ram_wr_done),
 
         .enable(1'b1),
         .abort(1'b0)
@@ -265,60 +307,8 @@ module ludp_dma_wrapper #(
     );
 
     // ============================================================
-    // Read descriptor CDC (s_clk -> m_clk)
-    // ============================================================
-    taxi_axis_if #(
-        .DATA_W(RD_DESC_DATA_W),
-        .KEEP_EN(1'b0),
-        .LAST_EN(1'b0)
-    ) rd_desc_m_if ();
-
-    taxi_axis_async_fifo #(
-        .DEPTH(16),
-        .FRAME_FIFO(1'b0)
-    ) rd_desc_cdc_inst (
-        .s_clk(s_clk),
-        .s_rst(s_rst),
-        .s_axis(rd_desc_if),
-        .m_clk(m_clk),
-        .m_rst(m_rst),
-        .m_axis(rd_desc_m_if)
-    );
-
-    // ============================================================
-    // Read data CDC (m_clk -> s_clk)
-    // rd_axis_m_if <- axi_dma_rd output
-    // rd_axis_s_if -> output port
-    // ============================================================
-    taxi_axis_if #(.DATA_W(AXI_DATA_WIDTH)) rd_axis_m_if ();
-    taxi_axis_if #(.DATA_W(AXI_DATA_WIDTH)) rd_axis_s_if ();
-
-    taxi_axis_async_fifo #(
-        .DEPTH(512),
-        .FRAME_FIFO(1'b0)
-    ) rd_data_cdc_inst (
-        .s_clk(m_clk),
-        .s_rst(m_rst),
-        .s_axis(rd_axis_m_if),
-        .m_clk(s_clk),
-        .m_rst(s_rst),
-        .m_axis(rd_axis_s_if)
-    );
-
-    assign rd_axis_tdata_out  = rd_axis_s_if.tdata;
-    assign rd_axis_tkeep_out  = rd_axis_s_if.tkeep;
-    assign rd_axis_tvalid_out = rd_axis_s_if.tvalid;
-    assign rd_axis_tlast_out  = rd_axis_s_if.tlast;
-    assign rd_axis_s_if.tready = rd_axis_tready_out;
-
-    logic s_rst_d1;
-    always_ff @(posedge m_clk) begin
-        s_rst_d1 <= s_rst;
-    end
-
-    // ============================================================
     // AXI DMA Write engine (m_clk domain)
-    // Reads from RAM, writes to AXI bus
+    // Reads from TX RAM, writes to AXI bus
     // Uses op_table for pipelined operation tracking
     // ============================================================
     wire [AXI_ADDR_WIDTH-1:0] wr_dma_desc_axi_addr = wr_dma_desc_m_if.tdata[WR_DMA_DESC_W-1:TAG_WIDTH+LEN_WIDTH+RAM_ADDR_WIDTH+RAM_SEL_WIDTH];
@@ -384,12 +374,12 @@ module ludp_dma_wrapper #(
         .m_axis_write_desc_status_valid(dma_wr_status_valid),
 
         .ram_rd_cmd_sel(),
-        .ram_rd_cmd_addr(ram_rd_cmd_addr),
-        .ram_rd_cmd_valid(ram_rd_cmd_valid),
-        .ram_rd_cmd_ready(ram_rd_cmd_ready),
-        .ram_rd_resp_data(ram_rd_resp_data),
-        .ram_rd_resp_valid(ram_rd_resp_valid),
-        .ram_rd_resp_ready(ram_rd_resp_ready),
+        .ram_rd_cmd_addr(tx_ram_rd_cmd_addr),
+        .ram_rd_cmd_valid(tx_ram_rd_cmd_valid),
+        .ram_rd_cmd_ready(tx_ram_rd_cmd_ready),
+        .ram_rd_resp_data(tx_ram_rd_resp_data),
+        .ram_rd_resp_valid(tx_ram_rd_resp_valid),
+        .ram_rd_resp_ready(tx_ram_rd_resp_ready),
 
         .enable(1'b1),
         .status_busy(),
@@ -410,49 +400,107 @@ module ludp_dma_wrapper #(
     );
 
     // ============================================================
-    // AXI DMA Read engine (m_clk domain)
+    // Read DMA descriptor CDC (s_clk -> m_clk)
+    // tdata = {axi_addr, ram_sel, ram_addr, len, tag}
     // ============================================================
-    wire [AXI_ADDR_WIDTH-1:0] rd_desc_addr_m = rd_desc_m_if.tdata[RD_DESC_DATA_W-1:LEN_WIDTH];
-    wire [LEN_WIDTH-1:0]      rd_desc_len_m  = rd_desc_m_if.tdata[LEN_WIDTH-1:0];
+    taxi_axis_if #(
+        .DATA_W(RD_DMA_DESC_W),
+        .KEEP_EN(1'b0),
+        .LAST_EN(1'b0)
+    ) rd_dma_desc_m_if ();
 
-    axi_dma_rd #(
+    taxi_axis_async_fifo #(
+        .DEPTH(16),
+        .FRAME_FIFO(1'b0)
+    ) rd_dma_desc_cdc_inst (
+        .s_clk(s_clk),
+        .s_rst(s_rst),
+        .s_axis(rd_desc_if),
+        .m_clk(m_clk),
+        .m_rst(m_rst),
+        .m_axis(rd_dma_desc_m_if)
+    );
+
+    // ============================================================
+    // Read DMA status CDC (m_clk -> s_clk)
+    // tdata = {error[3:0], tag[TAG_WIDTH-1:0]}
+    // ============================================================
+    taxi_axis_if #(
+        .DATA_W(RD_DMA_STATUS_W),
+        .KEEP_EN(1'b0),
+        .LAST_EN(1'b0)
+    ) rd_dma_status_m_if ();
+
+    wire [TAG_WIDTH-1:0] dma_rd_status_tag;
+    wire [3:0]           dma_rd_status_error;
+    wire                 dma_rd_status_valid;
+    reg                  rd_status_pending;
+    reg [TAG_WIDTH-1:0]  rd_status_tag_r;
+    reg [3:0]            rd_status_error_r;
+
+    always @(posedge m_clk) begin
+        if (m_rst) begin
+            rd_status_pending  <= 1'b0;
+            rd_status_tag_r    <= '0;
+            rd_status_error_r  <= '0;
+        end else begin
+            if (dma_rd_status_valid && !rd_status_pending) begin
+                rd_status_pending  <= 1'b1;
+                rd_status_tag_r    <= dma_rd_status_tag;
+                rd_status_error_r  <= dma_rd_status_error;
+            end else if (rd_dma_status_m_if.tready) begin
+                rd_status_pending <= 1'b0;
+            end
+        end
+    end
+
+    assign rd_dma_status_m_if.tdata[TAG_WIDTH-1:0]           = rd_status_tag_r;
+    assign rd_dma_status_m_if.tdata[TAG_WIDTH+3-1:TAG_WIDTH]  = rd_status_error_r;
+    assign rd_dma_status_m_if.tvalid = rd_status_pending;
+
+    taxi_axis_async_fifo #(
+        .DEPTH(16),
+        .FRAME_FIFO(1'b0)
+    ) rd_dma_status_cdc_inst (
+        .s_clk(m_clk),
+        .s_rst(m_rst),
+        .s_axis(rd_dma_status_m_if),
+        .m_clk(s_clk),
+        .m_rst(s_rst),
+        .m_axis(rd_dma_status_if)
+    );
+
+    // ============================================================
+    // AXI DMA Read engine (m_clk domain)
+    // Reads from AXI bus, writes to RX RAM
+    // Uses op_table for pipelined operation tracking
+    // ============================================================
+    wire [AXI_ADDR_WIDTH-1:0] rd_dma_desc_axi_addr = rd_dma_desc_m_if.tdata[RD_DMA_DESC_W-1:TAG_WIDTH+LEN_WIDTH+RAM_ADDR_WIDTH+RAM_SEL_WIDTH];
+    wire [RAM_SEL_WIDTH-1:0]  rd_dma_desc_ram_sel  = rd_dma_desc_m_if.tdata[TAG_WIDTH+LEN_WIDTH+RAM_ADDR_WIDTH+RAM_SEL_WIDTH-1:TAG_WIDTH+LEN_WIDTH+RAM_ADDR_WIDTH];
+    wire [RAM_ADDR_WIDTH-1:0] rd_dma_desc_ram_addr = rd_dma_desc_m_if.tdata[TAG_WIDTH+LEN_WIDTH+RAM_ADDR_WIDTH-1:TAG_WIDTH+LEN_WIDTH];
+    wire [LEN_WIDTH-1:0]      rd_dma_desc_len      = rd_dma_desc_m_if.tdata[TAG_WIDTH+LEN_WIDTH-1:TAG_WIDTH];
+    wire [TAG_WIDTH-1:0]      rd_dma_desc_tag      = rd_dma_desc_m_if.tdata[TAG_WIDTH-1:0];
+
+    dma_if_axi_rd #(
         .AXI_DATA_WIDTH(AXI_DATA_WIDTH),
         .AXI_ADDR_WIDTH(AXI_ADDR_WIDTH),
+        .AXI_STRB_WIDTH(AXI_DATA_WIDTH/8),
         .AXI_ID_WIDTH(AXI_ID_WIDTH),
         .AXI_MAX_BURST_LEN(AXI_MAX_BURST_LEN),
-        .AXIS_DATA_WIDTH(AXI_DATA_WIDTH),
-        .AXIS_KEEP_ENABLE(1),
-        .AXIS_KEEP_WIDTH(AXI_DATA_WIDTH/8),
-        .AXIS_LAST_ENABLE(1),
-        .AXIS_ID_ENABLE(0),
-        .AXIS_DEST_ENABLE(0),
-        .AXIS_USER_ENABLE(0),
+        .RAM_SEL_WIDTH(RAM_SEL_WIDTH),
+        .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH),
+        .RAM_SEG_COUNT(RAM_SEG_COUNT),
+        .RAM_SEG_DATA_WIDTH(RAM_SEG_DATA_WIDTH),
+        .RAM_SEG_BE_WIDTH(RAM_SEG_BE_WIDTH),
+        .RAM_SEG_ADDR_WIDTH(RAM_SEG_ADDR_WIDTH),
         .LEN_WIDTH(LEN_WIDTH),
-        .TAG_WIDTH(4),
-        .ENABLE_SG(0),
-        .ENABLE_UNALIGNED(0)
+        .TAG_WIDTH(TAG_WIDTH),
+        .OP_TABLE_SIZE(2**AXI_ID_WIDTH),
+        .USE_AXI_ID(1)
     ) dma_rd_inst (
         .clk(m_clk),
         .rst(m_rst),
-        .s_axis_read_desc_addr(rd_desc_addr_m),
-        .s_axis_read_desc_len(rd_desc_len_m),
-        .s_axis_read_desc_tag(4'h0),
-        .s_axis_read_desc_id(8'h0),
-        .s_axis_read_desc_dest(8'h0),
-        .s_axis_read_desc_user(1'b0),
-        .s_axis_read_desc_valid(rd_desc_m_if.tvalid),
-        .s_axis_read_desc_ready(rd_desc_m_if.tready),
-        .m_axis_read_desc_status_tag(),
-        .m_axis_read_desc_status_error(),
-        .m_axis_read_desc_status_valid(),
-        .m_axis_read_data_tdata(rd_axis_m_if.tdata),
-        .m_axis_read_data_tkeep(rd_axis_m_if.tkeep),
-        .m_axis_read_data_tvalid(rd_axis_m_if.tvalid),
-        .m_axis_read_data_tready(rd_axis_m_if.tready),
-        .m_axis_read_data_tlast(rd_axis_m_if.tlast),
-        .m_axis_read_data_tid(),
-        .m_axis_read_data_tdest(),
-        .m_axis_read_data_tuser(),
+
         .m_axi_arid(m_axi_arid),
         .m_axi_araddr(m_axi_araddr),
         .m_axi_arlen(m_axi_arlen),
@@ -469,7 +517,182 @@ module ludp_dma_wrapper #(
         .m_axi_rlast(m_axi_rlast),
         .m_axi_rvalid(m_axi_rvalid),
         .m_axi_rready(m_axi_rready),
+
+        .s_axis_read_desc_axi_addr(rd_dma_desc_axi_addr),
+        .s_axis_read_desc_ram_sel(rd_dma_desc_ram_sel),
+        .s_axis_read_desc_ram_addr(rd_dma_desc_ram_addr),
+        .s_axis_read_desc_len(rd_dma_desc_len),
+        .s_axis_read_desc_tag(rd_dma_desc_tag),
+        .s_axis_read_desc_valid(rd_dma_desc_m_if.tvalid),
+        .s_axis_read_desc_ready(rd_dma_desc_m_if.tready),
+
+        .m_axis_read_desc_status_tag(dma_rd_status_tag),
+        .m_axis_read_desc_status_error(dma_rd_status_error),
+        .m_axis_read_desc_status_valid(dma_rd_status_valid),
+
+        .ram_wr_cmd_sel(),
+        .ram_wr_cmd_be(rx_ram_wr_cmd_be),
+        .ram_wr_cmd_addr(rx_ram_wr_cmd_addr),
+        .ram_wr_cmd_data(rx_ram_wr_cmd_data),
+        .ram_wr_cmd_valid(rx_ram_wr_cmd_valid),
+        .ram_wr_cmd_ready(rx_ram_wr_cmd_ready),
+        .ram_wr_done(rx_ram_wr_done),
+
+        .enable(1'b1),
+        .status_busy(),
+        .stat_rd_op_start_tag(),
+        .stat_rd_op_start_len(),
+        .stat_rd_op_start_valid(),
+        .stat_rd_op_finish_tag(),
+        .stat_rd_op_finish_status(),
+        .stat_rd_op_finish_valid(),
+        .stat_rd_req_start_tag(),
+        .stat_rd_req_start_len(),
+        .stat_rd_req_start_valid(),
+        .stat_rd_req_finish_tag(),
+        .stat_rd_req_finish_status(),
+        .stat_rd_req_finish_valid(),
+        .stat_rd_op_table_full(),
+        .stat_rd_tx_stall()
+    );
+
+    // ============================================================
+    // AXI-Stream Source (m_clk domain)
+    // Reads from RX RAM, outputs 512-bit data
+    // ============================================================
+    wire [RAM_ADDR_WIDTH-1:0] source_desc_ram_addr;
+    wire [LEN_WIDTH-1:0]      source_desc_len;
+    wire [TAG_WIDTH-1:0]      source_desc_tag;
+    wire                      source_desc_valid;
+    wire                      source_desc_ready;
+
+    wire [TAG_WIDTH-1:0] source_status_tag;
+    wire [3:0]           source_status_error;
+    wire                 source_status_valid;
+
+    taxi_axis_if #(.DATA_W(AXI_DATA_WIDTH)) rd_axis_m_if ();
+
+    dma_client_axis_source #(
+        .RAM_ADDR_WIDTH(RAM_ADDR_WIDTH),
+        .SEG_COUNT(RAM_SEG_COUNT),
+        .SEG_DATA_WIDTH(RAM_SEG_DATA_WIDTH),
+        .SEG_BE_WIDTH(RAM_SEG_BE_WIDTH),
+        .SEG_ADDR_WIDTH(RAM_SEG_ADDR_WIDTH),
+        .AXIS_DATA_WIDTH(AXIS_DATA_WIDTH),
+        .AXIS_KEEP_ENABLE(1),
+        .AXIS_KEEP_WIDTH(AXI_DATA_WIDTH/8),
+        .AXIS_LAST_ENABLE(1),
+        .AXIS_ID_ENABLE(0),
+        .AXIS_DEST_ENABLE(0),
+        .AXIS_USER_ENABLE(0),
+        .LEN_WIDTH(LEN_WIDTH),
+        .TAG_WIDTH(TAG_WIDTH)
+    ) source_inst (
+        .clk(m_clk),
+        .rst(m_rst),
+
+        .s_axis_read_desc_ram_addr(source_desc_ram_addr),
+        .s_axis_read_desc_len(source_desc_len),
+        .s_axis_read_desc_tag(source_desc_tag),
+        .s_axis_read_desc_id(8'h0),
+        .s_axis_read_desc_dest(8'h0),
+        .s_axis_read_desc_user(1'b0),
+        .s_axis_read_desc_valid(source_desc_valid),
+        .s_axis_read_desc_ready(source_desc_ready),
+
+        .m_axis_read_desc_status_tag(source_status_tag),
+        .m_axis_read_desc_status_error(source_status_error),
+        .m_axis_read_desc_status_valid(source_status_valid),
+
+        .m_axis_read_data_tdata(rd_axis_m_if.tdata),
+        .m_axis_read_data_tkeep(rd_axis_m_if.tkeep),
+        .m_axis_read_data_tvalid(rd_axis_m_if.tvalid),
+        .m_axis_read_data_tready(rd_axis_m_if.tready),
+        .m_axis_read_data_tlast(rd_axis_m_if.tlast),
+        .m_axis_read_data_tid(),
+        .m_axis_read_data_tdest(),
+        .m_axis_read_data_tuser(),
+
+        .ram_rd_cmd_addr(rx_ram_rd_cmd_addr),
+        .ram_rd_cmd_valid(rx_ram_rd_cmd_valid),
+        .ram_rd_cmd_ready(rx_ram_rd_cmd_ready),
+        .ram_rd_resp_data(rx_ram_rd_resp_data),
+        .ram_rd_resp_valid(rx_ram_rd_resp_valid),
+        .ram_rd_resp_ready(rx_ram_rd_resp_ready),
+
         .enable(1'b1)
     );
+
+    // ============================================================
+    // Source descriptor: forward from dma_if_axi_rd status
+    // When AXI read completes and data is in RAM, tell source to read
+    // Store descriptor fields indexed by tag when consumed by dma_if_axi_rd,
+    // then forward to source when status returns
+    // ============================================================
+    reg [RAM_ADDR_WIDTH-1:0] rd_desc_store_ram_addr [2**TAG_WIDTH-1:0];
+    reg [LEN_WIDTH-1:0]      rd_desc_store_len      [2**TAG_WIDTH-1:0];
+    reg                      source_desc_pending;
+    reg [RAM_ADDR_WIDTH-1:0] source_desc_ram_addr_r;
+    reg [LEN_WIDTH-1:0]      source_desc_len_r;
+    reg [TAG_WIDTH-1:0]      source_desc_tag_r;
+
+    integer rd_desc_init_idx;
+
+    initial begin
+        for (rd_desc_init_idx = 0; rd_desc_init_idx < 2**TAG_WIDTH; rd_desc_init_idx = rd_desc_init_idx + 1) begin
+            rd_desc_store_ram_addr[rd_desc_init_idx] = '0;
+            rd_desc_store_len[rd_desc_init_idx] = '0;
+        end
+    end
+
+    always @(posedge m_clk) begin
+        if (rd_dma_desc_m_if.tvalid && rd_dma_desc_m_if.tready) begin
+            rd_desc_store_ram_addr[rd_dma_desc_tag] <= rd_dma_desc_ram_addr;
+            rd_desc_store_len[rd_dma_desc_tag]      <= rd_dma_desc_len;
+        end
+    end
+
+    always @(posedge m_clk) begin
+        if (m_rst) begin
+            source_desc_pending <= 1'b0;
+        end else begin
+            if (dma_rd_status_valid && !source_desc_pending) begin
+                source_desc_pending     <= 1'b1;
+                source_desc_ram_addr_r  <= rd_desc_store_ram_addr[dma_rd_status_tag];
+                source_desc_len_r       <= rd_desc_store_len[dma_rd_status_tag];
+                source_desc_tag_r       <= dma_rd_status_tag;
+            end else if (source_desc_ready && source_desc_pending) begin
+                source_desc_pending <= 1'b0;
+            end
+        end
+    end
+
+    assign source_desc_ram_addr = source_desc_ram_addr_r;
+    assign source_desc_len      = source_desc_len_r;
+    assign source_desc_tag      = source_desc_tag_r;
+    assign source_desc_valid    = source_desc_pending;
+
+    // ============================================================
+    // Read data CDC (m_clk -> s_clk)
+    // ============================================================
+    taxi_axis_if #(.DATA_W(AXI_DATA_WIDTH)) rd_axis_s_if ();
+
+    taxi_axis_async_fifo #(
+        .DEPTH(512),
+        .FRAME_FIFO(1'b0)
+    ) rd_data_cdc_inst (
+        .s_clk(m_clk),
+        .s_rst(m_rst),
+        .s_axis(rd_axis_m_if),
+        .m_clk(s_clk),
+        .m_rst(s_rst),
+        .m_axis(rd_axis_s_if)
+    );
+
+    assign rd_axis_tdata_out  = rd_axis_s_if.tdata;
+    assign rd_axis_tkeep_out  = rd_axis_s_if.tkeep;
+    assign rd_axis_tvalid_out = rd_axis_s_if.tvalid;
+    assign rd_axis_tlast_out  = rd_axis_s_if.tlast;
+    assign rd_axis_s_if.tready = rd_axis_tready_out;
 
 endmodule

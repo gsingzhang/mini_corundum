@@ -298,6 +298,9 @@ wire [15:0] ludp_last_payload_size;
 wire        ludp_dma_wr_error_flag;
 wire [3:0]  ludp_dma_wr_error_code;
 wire [3:0]  ludp_dma_wr_error_tag;
+wire        ludp_dma_rd_error_flag;
+wire [3:0]  ludp_dma_rd_error_code;
+wire [3:0]  ludp_dma_rd_error_tag;
 
 // Retx buffer external memory signals
 wire [31:0] ludp_retx_mem_wr_addr;
@@ -557,6 +560,9 @@ ludp_protocol_inst (
     .dma_wr_error_flag(ludp_dma_wr_error_flag),
     .dma_wr_error_code(ludp_dma_wr_error_code),
     .dma_wr_error_tag(ludp_dma_wr_error_tag),
+    .dma_rd_error_flag(ludp_dma_rd_error_flag),
+    .dma_rd_error_code(ludp_dma_rd_error_code),
+    .dma_rd_error_tag(ludp_dma_rd_error_tag),
 
     .m_axi_awid(ddr4_awid),
     .m_axi_awaddr(ddr4_awaddr_full),
@@ -1055,6 +1061,9 @@ end
 always @(posedge clk) begin
     if (ludp_dma_wr_error_flag && !ludp_dma_wr_error_flag_dly) begin
         $display("[%0t] FPGA: *** DMA WR ERROR! code=%0d blk_tag=%0d ***", $time, ludp_dma_wr_error_code, ludp_dma_wr_error_tag);
+    end
+    if (ludp_dma_rd_error_flag) begin
+        $display("[%0t] FPGA: *** DMA RD ERROR! code=%0d blk_tag=%0d ***", $time, ludp_dma_rd_error_code, ludp_dma_rd_error_tag);
     end
     if (tx_fifo_overflow) begin
         $display("[%0t] FPGA: TX FIFO overflow!", $time);

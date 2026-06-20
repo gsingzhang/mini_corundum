@@ -17,7 +17,8 @@ module ludp_tx_scheduler #(
     parameter int RAM_SEG_ADDR_WIDTH = 8,
     parameter int DESC_DATA_W      = MEM_ADDR_W + RAM_SEL_WIDTH + RAM_ADDR_WIDTH + LEN_WIDTH + TAG_WIDTH,
     parameter int WR_STATUS_W      = 4 + TAG_WIDTH,
-    parameter int RD_DESC_DATA_W   = MEM_ADDR_W + LEN_WIDTH
+    parameter int RD_DESC_DATA_W   = MEM_ADDR_W + RAM_SEL_WIDTH + RAM_ADDR_WIDTH + LEN_WIDTH + TAG_WIDTH,
+    parameter int RD_STATUS_W      = 4 + TAG_WIDTH
 )(
     input  wire        clk,
     input  wire        rst,
@@ -56,6 +57,7 @@ module ludp_tx_scheduler #(
     taxi_axis_if  wr_dma_desc_if,
     taxi_axis_if  wr_dma_status_if,
     taxi_axis_if  rd_desc_if,
+    taxi_axis_if  rd_dma_status_if,
 
     input  wire        retx_req,
     input  wire [31:0] retx_seq,
@@ -74,6 +76,10 @@ module ludp_tx_scheduler #(
     output logic                      dma_wr_error_flag,
     output logic [3:0]                dma_wr_error_code,
     output logic [TAG_WIDTH-1:0]      dma_wr_error_tag,
+
+    output logic                      dma_rd_error_flag,
+    output logic [3:0]                dma_rd_error_code,
+    output logic [TAG_WIDTH-1:0]      dma_rd_error_tag,
 
     output logic        dma_wr_enable,
 
@@ -150,7 +156,6 @@ module ludp_tx_scheduler #(
     endfunction
 
     logic sch_dma_rd_req;
-    logic [MEM_ADDR_W-1:0] sch_dma_rd_base_addr;
     logic [15:0]           sch_dma_rd_total_beats;
 
     wire [BLK_W-1:0] sch_target_blk = retx_pending_reg ? retx_pending_idx_reg : tx_rd_idx_reg;
@@ -304,6 +309,15 @@ module ludp_tx_scheduler #(
     assign wr_dma_status_if.tready = 1'b1;
 
     // ============================================================
+    // Read DMA status: consume rd_dma_status_if
+    // tdata = {error[3:0], tag[TAG_WIDTH-1:0]}
+    // ============================================================
+    wire [3:0]            rd_status_error = rd_dma_status_if.tdata[TAG_WIDTH+3-1:TAG_WIDTH];
+    wire [TAG_WIDTH-1:0]  rd_status_tag   = rd_dma_status_if.tdata[TAG_WIDTH-1:0];
+
+    assign rd_dma_status_if.tready = 1'b1;
+
+    // ============================================================
     // READ PATH: 512-bit AXI-Stream -> Unpack -> 64-bit AXI-Stream
     // ============================================================
     typedef enum logic [1:0] {
@@ -409,8 +423,16 @@ module ludp_tx_scheduler #(
         end
     end
 
-    assign rd_desc_if.tdata[LEN_WIDTH-1:0]              = sch_dma_rd_total_beats * KEEP_WIDTH;
-    assign rd_desc_if.tdata[RD_DESC_DATA_W-1:LEN_WIDTH] = sch_dma_rd_base_addr;
+    wire [MEM_ADDR_W-1:0] rd_cur_axi_addr = MEM_BASE_ADDR + MEM_ADDR_W'(sch_target_blk) * MEM_ADDR_W'(MEM_SLOT_SIZE);
+    wire [RAM_ADDR_WIDTH-1:0] rd_cur_ram_addr = blk_ram_addr(sch_target_blk);
+
+    assign rd_desc_if.tdata = {
+        rd_cur_axi_addr,
+        RAM_SEL_WIDTH'(1'b0),
+        rd_cur_ram_addr,
+        LEN_WIDTH'(sch_dma_rd_total_beats * KEEP_WIDTH),
+        TAG_WIDTH'(sch_target_blk)
+    };
     assign rd_desc_if.tvalid = (rd_state_reg == RD_DESC);
 
     assign dma_rd_axis_tready = (rd_state_reg == RD_DATA) && (!rd_unpack_valid_reg || rd_unpack_last_beat);
@@ -453,6 +475,9 @@ module ludp_tx_scheduler #(
             dma_wr_error_flag  <= 1'b0;
             dma_wr_error_code  <= '0;
             dma_wr_error_tag   <= '0;
+            dma_rd_error_flag  <= 1'b0;
+            dma_rd_error_code  <= '0;
+            dma_rd_error_tag   <= '0;
             for (int i = 0; i < NUM_BLOCKS; i = i + 1) begin
                 blk_state[i] <= BLK_EMPTY;
                 blk_seq[i]   <= 32'd0;
@@ -480,6 +505,12 @@ module ludp_tx_scheduler #(
                     dma_wr_error_code <= wr_status_error;
                     dma_wr_error_tag  <= wr_status_tag;
                 end
+            end
+
+            if (rd_dma_status_if.tvalid && rd_status_error != 4'd0) begin
+                dma_rd_error_flag <= 1'b1;
+                dma_rd_error_code <= rd_status_error;
+                dma_rd_error_tag  <= rd_status_tag;
             end
 
             if (tx_pkt_start && (blk_state[tx_rd_idx_reg] == BLK_READY)) begin
@@ -527,8 +558,6 @@ module ludp_tx_scheduler #(
     assign sch_dma_rd_req = (sch_state_reg == SCH_IDLE) && (
                         (retx_pending_reg && sch_can_issue) ||
                         (tx_pkt_start && (blk_state[tx_rd_idx_reg] == BLK_READY) && sch_can_issue));
-
-    assign sch_dma_rd_base_addr = MEM_BASE_ADDR + MEM_ADDR_W'(sch_target_blk) * MEM_ADDR_W'(MEM_SLOT_SIZE);
 
     assign sch_dma_rd_total_beats = (blk_size[sch_target_blk] + KEEP_W - 1) / KEEP_W;
 

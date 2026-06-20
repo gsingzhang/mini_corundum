@@ -86,6 +86,10 @@ module ludp_protocol #(
     output logic [3:0]  dma_wr_error_code,
     output logic [3:0]  dma_wr_error_tag,
 
+    output logic        dma_rd_error_flag,
+    output logic [3:0]  dma_rd_error_code,
+    output logic [3:0]  dma_rd_error_tag,
+
     output logic [3:0]           m_axi_awid,
     output logic [31:0]         m_axi_awaddr,
     output logic [7:0]          m_axi_awlen,
@@ -132,8 +136,9 @@ module ludp_protocol #(
     localparam int RAM_SEL_WIDTH  = 1;
     localparam int RAM_SEG_ADDR_WIDTH = 8;
     localparam int DESC_DATA_W    = 32 + RAM_SEL_WIDTH + RAM_ADDR_WIDTH + LEN_WIDTH + TAG_WIDTH;
-    localparam int RD_DESC_DATA_W = 32 + LEN_WIDTH;
+    localparam int RD_DESC_DATA_W = 32 + RAM_SEL_WIDTH + RAM_ADDR_WIDTH + LEN_WIDTH + TAG_WIDTH;
     localparam int WR_STATUS_W    = 4 + TAG_WIDTH;
+    localparam int RD_STATUS_W    = 4 + TAG_WIDTH;
 
     logic [31:0] seq_num_reg;
     logic [31:0] credit_limit_reg;
@@ -182,10 +187,16 @@ module ludp_protocol #(
     logic                  sch_dma_wr_error_flag;
     logic [3:0]            sch_dma_wr_error_code;
     logic [3:0]            sch_dma_wr_error_tag;
+    logic                  sch_dma_rd_error_flag;
+    logic [3:0]            sch_dma_rd_error_code;
+    logic [3:0]            sch_dma_rd_error_tag;
 
     assign dma_wr_error_flag = sch_dma_wr_error_flag;
     assign dma_wr_error_code = sch_dma_wr_error_code;
     assign dma_wr_error_tag  = sch_dma_wr_error_tag;
+    assign dma_rd_error_flag = sch_dma_rd_error_flag;
+    assign dma_rd_error_code = sch_dma_rd_error_code;
+    assign dma_rd_error_tag  = sch_dma_rd_error_tag;
 
     logic [511:0]          dma_rd_axis_tdata;
     logic [63:0]           dma_rd_axis_tkeep;
@@ -220,6 +231,12 @@ module ludp_protocol #(
         .KEEP_EN(1'b0),
         .LAST_EN(1'b0)
     ) rd_desc_if ();
+
+    taxi_axis_if #(
+        .DATA_W(RD_STATUS_W),
+        .KEEP_EN(1'b0),
+        .LAST_EN(1'b0)
+    ) rd_dma_status_if ();
 
     // ============================================================
     // Sink signals (scheduler -> wrapper)
@@ -374,10 +391,15 @@ module ludp_protocol #(
         .wr_dma_desc_if(wr_dma_desc_if),
         .wr_dma_status_if(wr_dma_status_if),
         .rd_desc_if(rd_desc_if),
+        .rd_dma_status_if(rd_dma_status_if),
 
         .dma_wr_error_flag(sch_dma_wr_error_flag),
         .dma_wr_error_code(sch_dma_wr_error_code),
         .dma_wr_error_tag (sch_dma_wr_error_tag),
+
+        .dma_rd_error_flag(sch_dma_rd_error_flag),
+        .dma_rd_error_code(sch_dma_rd_error_code),
+        .dma_rd_error_tag (sch_dma_rd_error_tag),
 
         .dma_rd_axis_tdata (dma_rd_axis_tdata),
         .dma_rd_axis_tkeep (dma_rd_axis_tkeep),
@@ -420,6 +442,7 @@ module ludp_protocol #(
         .wr_dma_desc_if(wr_dma_desc_if),
         .wr_dma_status_if(wr_dma_status_if),
         .rd_desc_if(rd_desc_if),
+        .rd_dma_status_if(rd_dma_status_if),
 
         .rd_axis_tdata_out (dma_rd_axis_tdata),
         .rd_axis_tkeep_out (dma_rd_axis_tkeep),
