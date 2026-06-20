@@ -92,7 +92,7 @@ always_ff @(posedge clk) begin
                     if (wr_burst_reg != 2'b00)
                         wr_addr_reg <= wr_addr_reg + (1 << wr_size_reg);
                     wr_count_reg <= wr_count_reg - 1;
-                    if (wr_count_reg == 0) begin
+                    if (wr_count_reg == 8'd0 || wr_count_reg == 8'd1) begin
                         b_id_reg <= wr_id_reg;
                         if (B_LATENCY > 0) begin
                             b_latency_cnt_reg <= B_LATENCY[B_LATENCY-1:0];

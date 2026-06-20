@@ -295,6 +295,9 @@ wire [31:0] ludp_packets_sent;
 wire [31:0] ludp_packets_retx;
 wire [31:0] ludp_cmd_count;
 wire [15:0] ludp_last_payload_size;
+wire        ludp_dma_wr_error_flag;
+wire [3:0]  ludp_dma_wr_error_code;
+wire [3:0]  ludp_dma_wr_error_tag;
 
 // Retx buffer external memory signals
 wire [31:0] ludp_retx_mem_wr_addr;
@@ -550,6 +553,9 @@ ludp_protocol_inst (
     .packets_retx(ludp_packets_retx),
     .cmd_count(ludp_cmd_count),
     .last_payload_size(ludp_last_payload_size),
+    .dma_wr_error_flag(ludp_dma_wr_error_flag),
+    .dma_wr_error_code(ludp_dma_wr_error_code),
+    .dma_wr_error_tag(ludp_dma_wr_error_tag),
 
     .m_axi_awid(ddr4_awid),
     .m_axi_awaddr(ddr4_awaddr_full),
@@ -762,7 +768,7 @@ always @(posedge clk) begin
     if (rst) begin
         led_reg <= 8'h00;
     end else begin
-        led_reg <= {ludp_f2h_tx_enabled, ludp_cmd_count[6:0]};
+        led_reg <= {ludp_dma_wr_error_flag, ludp_f2h_tx_enabled, ludp_cmd_count[5:0]};
     end
 end
 
@@ -1031,6 +1037,11 @@ udp_complete_inst (
 );
 
 // Debug prints for packet tracing
+reg ludp_dma_wr_error_flag_dly = 1'b0;
+always @(posedge clk) begin
+    ludp_dma_wr_error_flag_dly <= ludp_dma_wr_error_flag;
+end
+
 always @(posedge clk) begin
     if (tx_eth_hdr_valid && tx_eth_hdr_ready) begin
         $display("[%0t] FPGA: Ethernet TX hdr out from udp_complete_64, dest=%012h type=%04h", $time, tx_eth_dest_mac, tx_eth_type);
@@ -1043,6 +1054,9 @@ always @(posedge clk) begin
     end
     if (tx_error_underflow) begin
         $display("[%0t] FPGA: TX error underflow!", $time);
+    end
+    if (ludp_dma_wr_error_flag && !ludp_dma_wr_error_flag_dly) begin
+        $display("[%0t] FPGA: *** DMA WR ERROR! code=%0d blk_tag=%0d ***", $time, ludp_dma_wr_error_code, ludp_dma_wr_error_tag);
     end
     if (tx_fifo_overflow) begin
         $display("[%0t] FPGA: TX FIFO overflow!", $time);
